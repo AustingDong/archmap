@@ -1,81 +1,131 @@
 /**
- * ArchMap REST API client.
- * The MCP server doubles as a REST server on port 8765 via FastMCP SSE transport.
- * All endpoints accept/return JSON.
+ * ArchMap REST API client — uses the new /api/* REST routes.
  */
 
 const BASE = '/api'
 
-async function call<T>(tool: string, params: Record<string, unknown> = {}): Promise<T> {
-  const res = await fetch(`${BASE}/tools/${tool}`, {
+async function get<T>(path: string, params?: Record<string, string>): Promise<T> {
+  const url = new URL(path, window.location.origin)
+  if (params) Object.entries(params).forEach(([k, v]) => v && url.searchParams.set(k, v))
+  const res = await fetch(url.toString())
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || res.statusText)
+  }
+  return res.json()
+}
+
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
+    body: JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(`ArchMap API error: ${res.status}`)
-  const data = await res.json()
-  if (data.error) throw new Error(data.error)
-  return data as T
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || res.statusText)
+  }
+  return res.json()
+}
+
+async function patch<T>(path: string, params: Record<string, string>, body: unknown): Promise<T> {
+  const url = new URL(path, window.location.origin)
+  Object.entries(params).forEach(([k, v]) => v && url.searchParams.set(k, v))
+  const res = await fetch(url.toString(), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || res.statusText)
+  }
+  return res.json()
+}
+
+async function del<T>(path: string, params?: Record<string, string>): Promise<T> {
+  const url = new URL(path, window.location.origin)
+  if (params) Object.entries(params).forEach(([k, v]) => v && url.searchParams.set(k, v))
+  const res = await fetch(url.toString(), { method: 'DELETE' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail || res.statusText)
+  }
+  return res.json()
 }
 
 // ─── Project ──────────────────────────────────────────────────────────────────
 
+export const initProject = (project_path: string, name?: string) =>
+  post<import('../types').ProjectStatus>('/project/init', { project_path, name: name ?? '' })
+
 export const projectStatus = (project_path: string) =>
-  call<import('../types').ProjectStatus>('project_status', { project_path })
+  get<import('../types').ProjectStatus>(`${BASE}/project/status`, { project_path })
 
 // ─── Architecture ─────────────────────────────────────────────────────────────
 
 export const getArchitecture = (project_path: string) =>
-  call<{ components: import('../types').Component[]; dependencies: import('../types').Dependency[] }>(
-    'get_architecture', { project_path }
+  get<{ components: import('../types').Component[]; dependencies: import('../types').Dependency[] }>(
+    `${BASE}/architecture`, { project_path }
   )
 
 export const listComponents = (project_path: string, layer?: string) =>
-  call<import('../types').Component[]>('list_components', { project_path, layer: layer ?? '' })
+  get<import('../types').Component[]>(`${BASE}/components`, { project_path, layer: layer ?? '' })
 
 export const addComponent = (project_path: string, data: Partial<import('../types').Component>) =>
-  call<import('../types').Component>('add_component', { project_path, ...data })
+  post<import('../types').Component>('/components', { project_path, ...data })
 
 export const updateComponent = (project_path: string, component_id: string, data: Partial<import('../types').Component>) =>
-  call<import('../types').Component>('update_component', { project_path, component_id, ...data })
+  patch<import('../types').Component>(`${BASE}/components/${component_id}`, { project_path }, data)
 
 export const deleteComponent = (project_path: string, component_id: string) =>
-  call<string>('delete_component', { project_path, component_id })
+  del<string>(`${BASE}/components/${component_id}`, { project_path })
 
 export const getDependencyGraph = (project_path: string) =>
-  call<import('../types').DependencyGraph>('get_dependency_graph', { project_path })
+  get<import('../types').DependencyGraph>(`${BASE}/graph`, { project_path })
 
 export const addDependency = (project_path: string, from_component: string, to_component: string, label?: string, kind?: string) =>
-  call<import('../types').Dependency>('add_dependency', { project_path, from_component, to_component, label, kind })
+  post<import('../types').Dependency>('/dependencies', { project_path, from_component, to_component, label: label ?? 'uses', kind: kind ?? 'runtime' })
 
-// ─── Mapping ──────────────────────────────────────────────────────────────────
+export const removeDependency = (project_path: string, dep_id: string) =>
+  del<string>(`${BASE}/dependencies/${dep_id}`, { project_path })
 
-export const mapFile = (project_path: string, file_path: string, component_id: string) =>
-  call<import('../types').FileMapping>('map_file', { project_path, file_path, component_id })
+// ─── Mappings ─────────────────────────────────────────────────────────────────
+
+export const listAllMappings = (project_path: string) =>
+  get<import('../types').FileMapping[]>(`${BASE}/mappings`, { project_path })
 
 export const listComponentFiles = (project_path: string, component_id: string) =>
-  call<string[]>('list_component_files', { project_path, component_id })
+  get<string[]>(`${BASE}/mappings/component/${component_id}`, { project_path })
 
-export const getFileComponent = (project_path: string, file_path: string) =>
-  call<import('../types').FileMapping | null>('get_file_component', { project_path, file_path })
+export const mapFile = (project_path: string, file_path: string, component_id: string) =>
+  post<import('../types').FileMapping>('/mappings', { project_path, file_path, component_id })
+
+export const unmapFile = (project_path: string, file_path: string) =>
+  del<string>(`${BASE}/mappings`, { project_path, file_path })
 
 // ─── Planning ─────────────────────────────────────────────────────────────────
 
-export const listPlanItems = (project_path: string, component_id?: string, status?: string) =>
-  call<import('../types').PlanItem[]>('list_plan_items', { project_path, component_id: component_id ?? '', status: status ?? '' })
+export const listPlanItems = (project_path: string, component_id?: string, status?: string, priority?: string) =>
+  get<import('../types').PlanItem[]>(`${BASE}/plan`, {
+    project_path,
+    component_id: component_id ?? '',
+    status: status ?? '',
+    priority: priority ?? '',
+  })
 
 export const createPlanItem = (project_path: string, data: Partial<import('../types').PlanItem>) =>
-  call<import('../types').PlanItem>('create_plan_item', { project_path, ...data })
+  post<import('../types').PlanItem>('/plan', { project_path, ...data })
 
 export const updatePlanItem = (project_path: string, item_id: string, data: Partial<import('../types').PlanItem>) =>
-  call<import('../types').PlanItem>('update_plan_item', { project_path, item_id, ...data })
+  patch<import('../types').PlanItem>(`${BASE}/plan/${item_id}`, { project_path }, data)
 
 export const deletePlanItem = (project_path: string, item_id: string) =>
-  call<string>('delete_plan_item', { project_path, item_id })
+  del<string>(`${BASE}/plan/${item_id}`, { project_path })
 
 // ─── Scanner ──────────────────────────────────────────────────────────────────
 
 export const scanProject = (project_path: string, overwrite_auto = false, depth = 2) =>
-  call<{ components_created: number; components: string[]; files_mapped: number; message: string }>(
-    'scan_project', { project_path, overwrite_auto, depth }
+  post<{ components_created: number; components: string[]; files_mapped: number; message: string }>(
+    '/scan', { project_path, overwrite_auto, depth }
   )

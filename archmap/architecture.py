@@ -143,6 +143,15 @@ def remove_dependency(project_path: str, dependency_id: str) -> str:
     return "removed"
 
 
+def get_architecture(project_path: str) -> dict:
+    """Return {components, dependencies} together."""
+    arch = load_arch(project_path)
+    return {
+        "components": arch.get("components", []),
+        "dependencies": arch.get("dependencies", []),
+    }
+
+
 def get_dependency_graph(project_path: str) -> dict:
     """
     Returns {nodes, edges} suitable for ReactFlow / graph renderers.

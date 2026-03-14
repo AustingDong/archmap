@@ -36,6 +36,7 @@ def create_plan_item(
     description: str = "",
     component_id: Optional[str] = None,
     priority: str = "medium",
+    status: str = "todo",
     tags: Optional[list[str]] = None,
     metadata: Optional[dict] = None,
 ) -> dict:
@@ -44,6 +45,7 @@ def create_plan_item(
         description=description,
         component_id=component_id,
         priority=priority,
+        status=status,
         tags=tags or [],
         metadata=metadata or {},
     )
