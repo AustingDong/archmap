@@ -166,3 +166,28 @@ export const getFileContent = (project_path: string, file_path: string) =>
 
 export const getFileSymbol = (project_path: string, file_path: string, symbol: string) =>
   get<import('../types').SymbolExtract>(`${BASE}/file/symbol`, { project_path, file_path, symbol })
+
+// ─── Symbol sync + search + coding context ────────────────────────────────────
+
+export const syncFileSymbols = (project_path: string, file_path: string) =>
+  post<import('../types').FileMapping>('/mappings/sync-symbols', { project_path, file_path })
+
+export const searchSymbol = (project_path: string, q: string) =>
+  get<import('../types').SymbolSearchResult[]>(`${BASE}/symbols/search`, { project_path, q })
+
+export const getCodingContext = (project_path: string, component_id: string) =>
+  get<import('../types').CodingContext>(`${BASE}/coding-context/${component_id}`, { project_path })
+
+// ─── Architecture intelligence ────────────────────────────────────────────────
+
+export const describeArchitecture = (project_path: string) =>
+  get<{ text: string }>(`${BASE}/architecture/describe`, { project_path })
+
+export const findRelated = (project_path: string, q: string) =>
+  get<import('../types').RelatedSearchResult>(`${BASE}/architecture/search`, { project_path, q })
+
+export const getSymbolIndex = (project_path: string) =>
+  get<import('../types').SymbolIndexEntry[]>(`${BASE}/symbols/index`, { project_path })
+
+export const tracePath = (project_path: string, from_id: string, to_id: string) =>
+  get<import('../types').PathTrace>(`${BASE}/architecture/trace`, { project_path, from_id, to_id })

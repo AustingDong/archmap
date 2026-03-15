@@ -26,6 +26,7 @@ import uvicorn
 
 import archmap.architecture as arch_mod
 import archmap.inference as infer_mod
+import archmap.intelligence as intel_mod
 import archmap.mapping as map_mod
 import archmap.metrics as metrics_mod
 import archmap.planning as plan_mod
@@ -502,6 +503,127 @@ async def get_component_impact(component_id: str, project_path: str):
         "is_root":     len(incoming.get(component_id, [])) == 0,
         "impact_score": len(upstream),       # how many components would be affected
     }
+
+
+# ─── Symbol sync + search + coding context ────────────────────────────────────
+
+class SyncSymbolsReq(BaseModel):
+    project_path: str
+    file_path: str
+
+@app.post("/api/mappings/sync-symbols")
+async def sync_file_symbols(req: SyncSymbolsReq):
+    """Scan the actual file, auto-extract all top-level symbols, and update the mapping metadata."""
+    try:
+        extracted = await _run_sync(symbols_mod.extract_all_symbols, req.project_path, req.file_path)
+        metadata: dict = {"functions": extracted["symbols"]}
+        if extracted["language"]:
+            metadata["language"] = extracted["language"]
+        result = await _run_sync(map_mod.update_file_metadata, req.project_path, req.file_path, metadata)
+        _notify("mappings_changed")
+        return result
+    except NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/symbols/search")
+async def search_symbol(project_path: str, q: str = ""):
+    """Search for a symbol name across all mapped files. Returns [{symbol, file_path, component_id}]."""
+    try:
+        mappings = await _run_sync(map_mod.list_all_mappings, project_path)
+        q_lower = q.lower()
+        results = []
+        for rec in mappings:
+            for fn in rec.get("metadata", {}).get("functions", []):
+                if not q or q_lower in fn.lower():
+                    results.append({
+                        "symbol": fn,
+                        "file_path": rec["file_path"],
+                        "component_id": rec["component_id"],
+                    })
+        return results
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/coding-context/{component_id}")
+async def get_coding_context(component_id: str, project_path: str):
+    """
+    Return all information an agent needs before editing code in a component:
+    component details, mapped files with symbols, related dependencies (with names),
+    and open plan items.
+    """
+    try:
+        comp = await _run_sync(arch_mod.get_component, project_path, component_id)
+    except NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+    try:
+        files = await _run_sync(map_mod.list_component_files, project_path, component_id)
+        arch = await _run_sync(arch_mod.get_architecture, project_path)
+        items = await _run_sync(plan_mod.list_plan_items, project_path, component_id, None, None)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+    # Build component name lookup
+    name_map = {c["id"]: c["name"] for c in arch.get("components", [])}
+
+    # Filter deps involving this component and enrich with names
+    enriched_deps = []
+    for d in arch.get("dependencies", []):
+        if d["from_component"] == component_id or d["to_component"] == component_id:
+            enriched_deps.append({
+                **d,
+                "from_name": name_map.get(d["from_component"], d["from_component"]),
+                "to_name": name_map.get(d["to_component"], d["to_component"]),
+            })
+
+    return {
+        "component": comp,
+        "files": files,
+        "dependencies": enriched_deps,
+        "plan_items": items,
+    }
+
+
+# ─── Architecture intelligence ────────────────────────────────────────────────
+
+@app.get("/api/architecture/describe")
+async def describe_architecture(project_path: str):
+    """Markdown overview of the full architecture — components, files, symbols, deps, entry points."""
+    try:
+        text = await _run_sync(intel_mod.describe_architecture, project_path)
+        return {"text": text}
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/architecture/search")
+async def find_related(project_path: str, q: str = ""):
+    """Full-text search across all graph entities (components, files, symbols). Returns ranked results."""
+    try:
+        return await _run_sync(intel_mod.find_related, project_path, q)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/symbols/index")
+async def get_symbol_index(project_path: str):
+    """Complete symbol-to-file-to-component index for the project."""
+    try:
+        return await _run_sync(intel_mod.get_symbol_index, project_path)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+@app.get("/api/architecture/trace")
+async def trace_path(project_path: str, from_id: str, to_id: str):
+    """BFS shortest dependency path between two components."""
+    try:
+        return await _run_sync(intel_mod.trace_path, project_path, from_id, to_id)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
 
 
 # ─── File content + symbol extraction ────────────────────────────────────────

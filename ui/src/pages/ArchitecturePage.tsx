@@ -15,7 +15,7 @@ import {
   Plus, Trash2, Edit2, X, Check,
   ChevronRight, ChevronDown, Layers, GitBranch, Tag, Info,
   Monitor, Server, Database, Cloud, Share2, FlaskConical, Box,
-  Activity, Zap, AlertTriangle, FileCode, Cpu,
+  Activity, Zap, AlertTriangle, FileCode, Cpu, RefreshCw, FolderPlus, Link, Search, Map,
   type LucideIcon,
 } from 'lucide-react'
 import { useStore } from '../store'
@@ -25,8 +25,10 @@ import {
   inferDependencies, confirmDependency,
   getComponentMetrics, getComponentImpact,
   getFileContent, getFileSymbol,
+  mapFile, unmapFile, annotateFile, syncFileSymbols,
+  describeArchitecture, findRelated, tracePath,
 } from '../api/archMapApi'
-import type { Component, Dependency, FileMapping, Layer, ComponentMetrics, ComponentImpact, FileContent, SymbolExtract } from '../types'
+import type { Component, Dependency, FileMapping, Layer, ComponentMetrics, ComponentImpact, FileContent, SymbolExtract, RelatedSearchResult, PathTrace } from '../types'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -282,30 +284,72 @@ function FileNode({ data }: { data: any }) {
   const isSelected: boolean = data.selected ?? false
   const expanded: boolean = data.expanded ?? false
   const loading: boolean = data.loading ?? false
+  const syncing: boolean = data.syncing ?? false
   const hasSymbols = Array.isArray(functions) && functions.length > 0
+  const [hovered, setHovered] = React.useState(false)
 
   return (
-    <div style={{
-      background: isSelected
-        ? `linear-gradient(145deg, rgba(20,28,46,0.97), rgba(12,18,34,0.98))`
-        : 'rgba(12,18,32,0.95)',
-      backdropFilter: 'blur(12px)',
-      border: `1px solid ${isSelected ? c + '88' : c + '33'}`,
-      borderRadius: 10,
-      width: 158,
-      overflow: 'hidden',
-      boxShadow: isSelected
-        ? `0 0 0 1px ${c}44, 0 0 20px ${c}30, 0 4px 16px rgba(0,0,0,0.5)`
-        : `0 2px 12px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)`,
-      animation: 'node-appear 0.18s ease both',
-      transition: 'border-color 0.2s, box-shadow 0.2s',
-      cursor: 'pointer',
-    }}>
+    <div
+      style={{
+        background: isSelected
+          ? `linear-gradient(145deg, rgba(20,28,46,0.97), rgba(12,18,34,0.98))`
+          : 'rgba(12,18,32,0.95)',
+        backdropFilter: 'blur(12px)',
+        border: `1px solid ${isSelected ? c + '88' : c + '33'}`,
+        borderRadius: 10,
+        width: 158,
+        overflow: 'visible',
+        boxShadow: isSelected
+          ? `0 0 0 1px ${c}44, 0 0 20px ${c}30, 0 4px 16px rgba(0,0,0,0.5)`
+          : `0 2px 12px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)`,
+        animation: 'node-appear 0.18s ease both',
+        transition: 'border-color 0.2s, box-shadow 0.2s',
+        cursor: 'pointer',
+        position: 'relative',
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       <Handle type="target" position={Position.Top} id="t" style={{ opacity: 0 }} />
       <Handle type="source" position={Position.Bottom} id="b" style={{ opacity: 0 }} />
 
+      {/* Hover action buttons */}
+      {hovered && (
+        <div style={{
+          position: 'absolute', top: -10, right: -6, display: 'flex', gap: 3, zIndex: 10,
+        }}>
+          <button
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); data.onSync?.() }}
+            title="Sync symbols from actual file"
+            style={{
+              background: 'rgba(13,20,33,0.95)', border: '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 5, cursor: 'pointer', padding: '2px 4px',
+              color: c, display: 'flex', alignItems: 'center',
+            }}
+          >
+            {syncing
+              ? <span className="spinner" style={{ width: 8, height: 8, borderWidth: 1.5 }} />
+              : <RefreshCw size={8} />
+            }
+          </button>
+          <button
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); data.onUnmap?.() }}
+            title="Unmap file from component"
+            style={{
+              background: 'rgba(13,20,33,0.95)', border: '1px solid rgba(255,100,100,0.2)',
+              borderRadius: 5, cursor: 'pointer', padding: '2px 4px',
+              color: '#f87171', display: 'flex', alignItems: 'center',
+            }}
+          >
+            <X size={8} />
+          </button>
+        </div>
+      )}
+
       {/* Micro top stripe */}
-      <div style={{ height: 2, background: `linear-gradient(90deg, ${c}cc, transparent)` }} />
+      <div style={{ height: 2, background: `linear-gradient(90deg, ${c}cc, transparent)`, borderRadius: '10px 10px 0 0' }} />
 
       <div style={{ padding: '6px 8px 7px' }}>
         {/* Filename row */}
@@ -368,20 +412,27 @@ function SymbolNode({ data }: { data: any }) {
   const c = parentColor ?? '#64748b'
   const isCls = !symbol.endsWith('()')
   const name = symbol.replace(/\(\)$/, '')
+  const [hovered, setHovered] = React.useState(false)
+
   return (
-    <div style={{
-      background: 'rgba(6,10,20,0.97)',
-      border: `1px solid ${c}30`,
-      borderRadius: 7,
-      width: 136,
-      overflow: 'hidden',
-      boxShadow: `0 1px 8px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.03)`,
-      cursor: 'pointer',
-      animation: 'node-appear 0.14s ease both',
-      transition: 'border-color 0.15s',
-    }}>
+    <div
+      style={{
+        background: 'rgba(6,10,20,0.97)',
+        border: `1px solid ${c}30`,
+        borderRadius: 7,
+        width: 136,
+        overflow: 'visible',
+        boxShadow: `0 1px 8px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.03)`,
+        cursor: 'pointer',
+        animation: 'node-appear 0.14s ease both',
+        transition: 'border-color 0.15s',
+        position: 'relative',
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       <Handle type="target" position={Position.Top} id="t" style={{ opacity: 0 }} />
-      <div style={{ height: 1.5, background: `linear-gradient(90deg, ${c}88, transparent)` }} />
+      <div style={{ height: 1.5, background: `linear-gradient(90deg, ${c}88, transparent)`, borderRadius: '7px 7px 0 0' }} />
       <div style={{ padding: '5px 9px', display: 'flex', alignItems: 'center', gap: 5 }}>
         <span style={{
           fontSize: 7, fontWeight: 800, padding: '1px 4px', borderRadius: 3, flexShrink: 0,
@@ -389,9 +440,414 @@ function SymbolNode({ data }: { data: any }) {
           color: isCls ? '#a855f7' : c, fontFamily: 'monospace', letterSpacing: '0.04em',
         }}>{isCls ? 'cls' : 'fn'}</span>
         <span style={{
-          fontSize: 9.5, fontFamily: 'monospace', color: 'var(--text-secondary)',
+          flex: 1, fontSize: 9.5, fontFamily: 'monospace', color: 'var(--text-secondary)',
           fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }} title={name}>{name}</span>
+        {hovered && (
+          <button
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); data.onRemove?.() }}
+            title="Remove symbol from registry"
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer', padding: '0 1px',
+              color: '#f87171', display: 'flex', alignItems: 'center', flexShrink: 0,
+            }}
+          >
+            <X size={8} />
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Resizable panel hook ───────────────────────────────────────────────────────
+// Returns [width, dragHandleProps]. Drag the left edge to resize.
+
+function usePanelResize(defaultWidth: number, min = 220, max = 700) {
+  const [width, setWidth] = React.useState(defaultWidth)
+  const dragging = React.useRef(false)
+  const startX = React.useRef(0)
+  const startW = React.useRef(0)
+
+  const onMouseDown = React.useCallback((e: React.MouseEvent) => {
+    dragging.current = true
+    startX.current = e.clientX
+    startW.current = width
+    e.preventDefault()
+
+    const onMove = (ev: MouseEvent) => {
+      if (!dragging.current) return
+      const delta = startX.current - ev.clientX   // drag left = wider
+      setWidth(Math.min(max, Math.max(min, startW.current + delta)))
+    }
+    const onUp = () => {
+      dragging.current = false
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [width, min, max])
+
+  const handle = (
+    <div
+      onMouseDown={onMouseDown}
+      style={{
+        position: 'absolute', left: 0, top: 0, bottom: 0, width: 5,
+        cursor: 'col-resize', zIndex: 10,
+        background: 'transparent',
+        transition: 'background 0.15s',
+      }}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(96,165,250,0.25)' }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+    />
+  )
+
+  return [width, handle] as const
+}
+
+// ── Markdown renderer ──────────────────────────────────────────────────────────
+// Lightweight line-by-line renderer: h1/h2/h3, bold, inline code, bullets, hr.
+
+function renderInline(text: string): React.ReactNode[] {
+  // Parse **bold** and `code` inline spans
+  const parts: React.ReactNode[] = []
+  const rx = /(\*\*(.+?)\*\*|`([^`]+)`)/g
+  let last = 0, m: RegExpExecArray | null
+  while ((m = rx.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index))
+    if (m[2] != null) parts.push(<strong key={m.index} style={{ color: '#e2e8f0', fontWeight: 700 }}>{m[2]}</strong>)
+    else parts.push(<code key={m.index} style={{ fontFamily: 'monospace', fontSize: '0.9em', padding: '1px 5px', borderRadius: 4, background: 'rgba(96,165,250,0.12)', color: '#93c5fd' }}>{m[3]}</code>)
+    last = m.index + m[0].length
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return parts
+}
+
+function MarkdownView({ text }: { text: string }) {
+  const lines = text.split('\n')
+  const nodes: React.ReactNode[] = []
+  let bulletBuf: string[] = []
+
+  const flushBullets = () => {
+    if (!bulletBuf.length) return
+    nodes.push(
+      <ul key={`ul-${nodes.length}`} style={{ margin: '4px 0 10px 0', paddingLeft: 18, listStyle: 'none' }}>
+        {bulletBuf.map((b, i) => (
+          <li key={i} style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.65, marginBottom: 2, display: 'flex', gap: 7, alignItems: 'flex-start' }}>
+            <span style={{ color: '#60a5fa', marginTop: 1, flexShrink: 0 }}>›</span>
+            <span>{renderInline(b)}</span>
+          </li>
+        ))}
+      </ul>
+    )
+    bulletBuf = []
+  }
+
+  lines.forEach((raw, idx) => {
+    const line = raw.trimEnd()
+
+    if (line.startsWith('# ')) {
+      flushBullets()
+      nodes.push(
+        <div key={idx} style={{
+          fontSize: 15, fontWeight: 800, color: '#f1f5f9', marginTop: nodes.length ? 18 : 0, marginBottom: 6,
+          paddingBottom: 6, borderBottom: '1px solid rgba(96,165,250,0.2)',
+          letterSpacing: '-0.01em',
+        }}>{renderInline(line.slice(2))}</div>
+      )
+    } else if (line.startsWith('## ')) {
+      flushBullets()
+      nodes.push(
+        <div key={idx} style={{
+          fontSize: 12, fontWeight: 700, color: '#94c8ff', marginTop: 16, marginBottom: 5,
+          display: 'flex', alignItems: 'center', gap: 7,
+        }}>
+          <span style={{ display: 'inline-block', width: 3, height: 12, borderRadius: 2, background: '#60a5fa', flexShrink: 0 }} />
+          {renderInline(line.slice(3))}
+        </div>
+      )
+    } else if (line.startsWith('### ')) {
+      flushBullets()
+      nodes.push(
+        <div key={idx} style={{ fontSize: 10.5, fontWeight: 700, color: '#7dd3fc', marginTop: 10, marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+          {renderInline(line.slice(4))}
+        </div>
+      )
+    } else if (/^-{3,}$/.test(line)) {
+      flushBullets()
+      nodes.push(<hr key={idx} style={{ border: 'none', borderTop: '1px solid rgba(255,255,255,0.07)', margin: '10px 0' }} />)
+    } else if (line.startsWith('- ') || line.startsWith('* ')) {
+      bulletBuf.push(line.slice(2))
+    } else if (line.trim() === '') {
+      flushBullets()
+      nodes.push(<div key={idx} style={{ height: 4 }} />)
+    } else {
+      flushBullets()
+      nodes.push(
+        <p key={idx} style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.75, margin: '0 0 4px 0' }}>
+          {renderInline(line)}
+        </p>
+      )
+    }
+  })
+  flushBullets()
+
+  return <div>{nodes}</div>
+}
+
+// ── Intelligence Panel ─────────────────────────────────────────────────────────
+// Searchable graph explorer for humans and agents. Provides find_related,
+// describe_architecture, and trace_path without leaving the graph view.
+
+function IntelligencePanel({ projectPath, components, onClose }: {
+  projectPath: string
+  components: Component[]
+  onClose: () => void
+}) {
+  const [panelWidth, resizeHandle] = usePanelResize(380)
+  const [tab, setTab] = React.useState<'search' | 'describe' | 'trace'>('search')
+  const [query, setQuery] = React.useState('')
+  const [searchResult, setSearchResult] = React.useState<RelatedSearchResult | null>(null)
+  const [searching, setSearching] = React.useState(false)
+  const [descText, setDescText] = React.useState<string | null>(null)
+  const [descLoading, setDescLoading] = React.useState(false)
+  const [traceFrom, setTraceFrom] = React.useState('')
+  const [traceTo, setTraceTo] = React.useState('')
+  const [traceResult, setTraceResult] = React.useState<PathTrace | null>(null)
+  const [tracing, setTracing] = React.useState(false)
+
+  const handleSearch = async () => {
+    if (!query.trim()) return
+    setSearching(true)
+    try { setSearchResult(await findRelated(projectPath, query)) }
+    catch { /* silent */ }
+    finally { setSearching(false) }
+  }
+
+  const handleDescribe = async () => {
+    if (descText) return  // already loaded
+    setDescLoading(true)
+    try { const r = await describeArchitecture(projectPath); setDescText(r.text) }
+    catch { /* silent */ }
+    finally { setDescLoading(false) }
+  }
+
+  React.useEffect(() => { if (tab === 'describe') handleDescribe() }, [tab])
+
+  const handleTrace = async () => {
+    if (!traceFrom || !traceTo) return
+    setTracing(true)
+    try { setTraceResult(await tracePath(projectPath, traceFrom, traceTo)) }
+    catch { /* silent */ }
+    finally { setTracing(false) }
+  }
+
+  const TAB_STYLE = (active: boolean) => ({
+    flex: 1, padding: '6px 0', fontSize: 10.5, fontWeight: active ? 700 : 500,
+    background: active ? 'rgba(96,165,250,0.12)' : 'none',
+    border: 'none', borderBottom: `2px solid ${active ? '#60a5fa' : 'transparent'}`,
+    cursor: 'pointer', color: active ? '#60a5fa' : 'var(--text-muted)', transition: 'all 0.15s',
+  })
+
+  return (
+    <div style={{
+      width: panelWidth, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      position: 'relative',
+      background: 'rgba(8,13,24,0.98)', borderLeft: '1px solid rgba(255,255,255,0.07)',
+      backdropFilter: 'blur(20px)',
+    }}>
+      {resizeHandle}
+      <div style={{ height: 2, background: 'linear-gradient(90deg, #60a5facc, #34d39944)' }} />
+
+      {/* Header */}
+      <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.07)', display: 'flex', alignItems: 'center', gap: 9 }}>
+        <Map size={14} color="#60a5fa" style={{ flexShrink: 0 }} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 13 }}>Graph Intelligence</div>
+          <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1 }}>Explore the architecture without reading source files</div>
+        </div>
+        <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 4 }}><X size={13} /></button>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+        <button style={TAB_STYLE(tab === 'search')} onClick={() => setTab('search')}>Search</button>
+        <button style={TAB_STYLE(tab === 'describe')} onClick={() => setTab('describe')}>Overview</button>
+        <button style={TAB_STYLE(tab === 'trace')} onClick={() => setTab('trace')}>Trace Path</button>
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+
+        {/* ── Search tab ── */}
+        {tab === 'search' && (
+          <div style={{ padding: 16 }}>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+              <input
+                type="text" placeholder="e.g. authentication, database, validate..."
+                value={query} onChange={e => setQuery(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleSearch()}
+                style={{ flex: 1, fontSize: 11.5 }} autoFocus
+              />
+              <button className="btn btn-primary btn-sm" onClick={handleSearch} disabled={searching || !query.trim()}>
+                {searching ? <span className="spinner" style={{ width: 10, height: 10 }} /> : <Search size={11} />}
+              </button>
+            </div>
+
+            {searchResult && (
+              <>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 10, padding: '5px 9px', background: 'rgba(96,165,250,0.06)', borderRadius: 7, border: '1px solid rgba(96,165,250,0.12)' }}>
+                  {searchResult.summary}
+                </div>
+
+                {searchResult.components.length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Components</div>
+                    {searchResult.components.map(c => (
+                      <div key={c.id} style={{ marginBottom: 5, padding: '6px 9px', background: 'rgba(255,255,255,0.03)', borderRadius: 7, border: '1px solid rgba(255,255,255,0.07)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                          <div style={{ width: 7, height: 7, borderRadius: '50%', background: LAYER_COLOR[c.layer] ?? '#94a3b8', flexShrink: 0 }} />
+                          <span style={{ fontSize: 11.5, fontWeight: 700 }}>{c.name}</span>
+                          <span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 'auto' }}>{c.layer}</span>
+                        </div>
+                        {c.description && <p style={{ fontSize: 10.5, color: 'var(--text-muted)', lineHeight: 1.5, margin: 0 }}>{c.description}</p>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {searchResult.files.length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Files</div>
+                    {searchResult.files.slice(0, 8).map(f => (
+                      <div key={f.file_path} style={{ marginBottom: 4, padding: '5px 9px', background: 'rgba(255,255,255,0.02)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.06)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <FileCode size={9} color="var(--text-muted)" style={{ flexShrink: 0 }} />
+                          <span style={{ fontSize: 10, fontFamily: 'monospace', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.file_path}</span>
+                          {f.language && <span style={{ fontSize: 8, color: 'var(--text-muted)' }}>{f.language}</span>}
+                        </div>
+                        {f.component_name && <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1, paddingLeft: 14 }}>→ {f.component_name}</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {searchResult.symbols.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Symbols</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {searchResult.symbols.slice(0, 20).map((s, i) => {
+                        const isCls = !s.symbol.endsWith('()')
+                        return (
+                          <div key={i} style={{ padding: '3px 8px', borderRadius: 5, fontSize: 9.5, fontFamily: 'monospace', background: isCls ? 'rgba(168,85,247,0.1)' : 'rgba(96,165,250,0.08)', color: isCls ? '#a855f7' : '#60a5fa', border: `1px solid ${isCls ? 'rgba(168,85,247,0.2)' : 'rgba(96,165,250,0.15)'}` }} title={`${s.file_path} → ${s.component_name}`}>
+                            {s.symbol}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {!searchResult && (
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.7 }}>
+                Search across component names, descriptions, file paths, and symbol names.<br />
+                <span style={{ opacity: 0.6 }}>Try: "auth", "api", "store", "validate"</span>
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* ── Describe tab ── */}
+        {tab === 'describe' && (
+          <div style={{ padding: 16 }}>
+            {descLoading && <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}><span className="spinner spinner-lg" /></div>}
+            {descText && <MarkdownView text={descText} />}
+            {descText && (
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ marginTop: 12, width: '100%', justifyContent: 'center' }}
+                onClick={() => { navigator.clipboard.writeText(descText) }}
+              >
+                Copy for Agent
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* ── Trace tab ── */}
+        {tab === 'trace' && (
+          <div style={{ padding: 16 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+              <div>
+                <label style={{ fontSize: 9.5, color: 'var(--text-muted)', marginBottom: 3, display: 'block' }}>From component</label>
+                <select value={traceFrom} onChange={e => setTraceFrom(e.target.value)} style={{ width: '100%', fontSize: 11 }}>
+                  <option value="">— select —</option>
+                  {components.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 9.5, color: 'var(--text-muted)', marginBottom: 3, display: 'block' }}>To component</label>
+                <select value={traceTo} onChange={e => setTraceTo(e.target.value)} style={{ width: '100%', fontSize: 11 }}>
+                  <option value="">— select —</option>
+                  {components.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <button className="btn btn-primary btn-sm" onClick={handleTrace} disabled={tracing || !traceFrom || !traceTo}>
+                {tracing ? <span className="spinner" style={{ width: 10, height: 10 }} /> : 'Trace Path'}
+              </button>
+            </div>
+
+            {traceResult && (
+              traceResult.found ? (
+                <div>
+                  <div style={{ padding: '7px 10px', marginBottom: 10, borderRadius: 8, background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)', fontSize: 10.5, color: '#34d399', fontWeight: 600 }}>
+                    Path found — {traceResult.length} hop{traceResult.length !== 1 ? 's' : ''}
+                  </div>
+                  <div style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--text-muted)', marginBottom: 12, padding: '6px 9px', background: 'rgba(255,255,255,0.03)', borderRadius: 6 }}>
+                    {traceResult.text}
+                  </div>
+                  {traceResult.path.map((node, i) => (
+                    <div key={node.component_id} style={{ marginBottom: 6 }}>
+                      {i > 0 && node.via_dependency && (
+                        <div style={{ fontSize: 9, color: 'var(--text-muted)', paddingLeft: 12, marginBottom: 2 }}>
+                          ↓ {node.via_dependency.label} ({node.via_dependency.confidence})
+                        </div>
+                      )}
+                      <div style={{ padding: '6px 9px', borderRadius: 7, background: 'rgba(255,255,255,0.03)', border: `1px solid ${LAYER_COLOR[node.layer] ?? '#94a3b8'}22` }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <div style={{ width: 6, height: 6, borderRadius: '50%', background: LAYER_COLOR[node.layer] ?? '#94a3b8', flexShrink: 0 }} />
+                          <span style={{ fontSize: 11.5, fontWeight: 700 }}>{node.component_name}</span>
+                          <span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 'auto' }}>{node.layer}</span>
+                        </div>
+                        {node.files.length > 0 && (
+                          <div style={{ marginTop: 4, paddingLeft: 12 }}>
+                            {node.files.map(f => (
+                              <span key={f} style={{ fontSize: 8.5, fontFamily: 'monospace', color: 'var(--text-muted)', display: 'block' }}>{f}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ padding: '7px 10px', borderRadius: 8, background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', fontSize: 10.5, color: '#f87171' }}>
+                  {traceResult.text ?? traceResult.error ?? 'No path found'}
+                </div>
+              )
+            )}
+
+            {!traceResult && (
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.7 }}>
+                Find the shortest dependency path between two components.<br />
+                <span style={{ opacity: 0.6 }}>Useful for understanding data flow and blast radius.</span>
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )
@@ -429,6 +885,7 @@ export default function ArchitecturePage() {
   const [loading, setLoading] = useState(false)
   const [inferring, setInferring] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
+  const [showIntel, setShowIntel] = useState(false)
   const [expandedComponents, setExpandedComponents] = useState<Set<string>>(new Set())
   const [loadingComponents, setLoadingComponents] = useState<Set<string>>(new Set())
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set())
@@ -710,6 +1167,111 @@ export default function ArchitecturePage() {
     setExpandedFiles(prev => new Set(prev).add(fileNodeId))
   }, [expandedFiles, nodes])
 
+  // ── File node CRUD actions ──────────────────────────────────────────────────
+
+  const [syncingFiles, setSyncingFiles] = useState<Set<string>>(new Set())
+
+  // Rebuild symbol nodes for a file node using the provided updated file data (avoids stale closure)
+  const refreshSymbolNodes = useCallback((fileNodeId: string, updatedFile: FileMapping) => {
+    const symbols: string[] = updatedFile.metadata?.functions ?? []
+    // Remove old sym nodes + edges
+    setNodes(prev => prev.filter(n => !n.id.startsWith(`sym::${fileNodeId}::`)))
+    setEdges(prev => prev.filter(e => !e.id.startsWith(`symedge::${fileNodeId}::`)))
+    if (symbols.length === 0) {
+      setExpandedFiles(prev => { const s = new Set(prev); s.delete(fileNodeId); return s })
+      return
+    }
+    // Re-build sym nodes using current position from DOM (via functional setNodes)
+    setNodes(prev => {
+      const fileNode = prev.find(n => n.id === fileNodeId)
+      if (!fileNode) return prev
+      const { x: px, y: py } = fileNode.position
+      const parentColor = (fileNode.data?.parentColor as string) ?? '#64748b'
+      const filePath = updatedFile.file_path
+      const cols = 2, sw = 136, sh = 46, gap = 6
+      const totalW = Math.min(symbols.length, cols) * (sw + gap) - gap
+      const startX = px + (158 - totalW) / 2
+      const symNodes: Node[] = symbols.map((sym, i) => ({
+        id: `sym::${fileNodeId}::${i}`,
+        type: 'symbol',
+        position: { x: startX + (i % cols) * (sw + gap), y: py + 108 + Math.floor(i / cols) * (sh + gap) },
+        data: { symbol: sym, filePath, parentColor, fileNodeId },
+        draggable: true, selectable: true,
+      }))
+      return [...prev, ...symNodes]
+    })
+    setEdges(prev => {
+      const symEdges: Edge[] = symbols.map((_, i) => ({
+        id: `symedge::${fileNodeId}::${i}`,
+        source: fileNodeId, target: `sym::${fileNodeId}::${i}`,
+        type: 'straight',
+        style: { stroke: 'rgba(100,116,139,0.28)', strokeWidth: 0.75, strokeDasharray: '2 3' },
+        selectable: false, focusable: false,
+      }))
+      return [...prev, ...symEdges]
+    })
+    if (symbols.length > 0) {
+      setExpandedFiles(prev => new Set(prev).add(fileNodeId))
+    }
+  }, [])
+
+  const handleSyncFile = useCallback(async (fileNodeId: string, file: FileMapping) => {
+    if (!projectPath) return
+    setSyncingFiles(prev => new Set(prev).add(fileNodeId))
+    try {
+      const updated = await syncFileSymbols(projectPath, file.file_path)
+      // Update the file node's data in-place
+      setNodes(prev => prev.map(n =>
+        n.id === fileNodeId ? { ...n, data: { ...n.data, file: updated } } : n
+      ))
+      // If symbols were expanded, refresh them with new data
+      if (expandedFiles.has(fileNodeId)) {
+        refreshSymbolNodes(fileNodeId, updated)
+      }
+      // Keep FilePanel in sync
+      setFilePanel(prev => prev?.nodeId === fileNodeId ? { ...prev, file: updated } : prev)
+      toast('success', `Synced ${updated.metadata?.functions?.length ?? 0} symbol(s)`)
+    } catch (e: any) { toast('error', e.message) }
+    finally { setSyncingFiles(prev => { const s = new Set(prev); s.delete(fileNodeId); return s }) }
+  }, [projectPath, expandedFiles, refreshSymbolNodes])
+
+  const handleUnmapFile = useCallback(async (fileNodeId: string, file: FileMapping) => {
+    if (!projectPath) return
+    try {
+      await unmapFile(projectPath, file.file_path)
+      // Collapse symbols first
+      setNodes(prev => prev.filter(n =>
+        n.id !== fileNodeId && !n.id.startsWith(`sym::${fileNodeId}::`)
+      ))
+      setEdges(prev => prev.filter(e =>
+        e.target !== fileNodeId && e.source !== fileNodeId && !e.id.startsWith(`symedge::${fileNodeId}::`)
+      ))
+      setExpandedFiles(prev => { const s = new Set(prev); s.delete(fileNodeId); return s })
+      if (filePanel?.nodeId === fileNodeId) setFilePanel(null)
+      toast('success', 'File unmapped')
+    } catch (e: any) { toast('error', e.message) }
+  }, [projectPath, filePanel])
+
+  const handleRemoveSymbol = useCallback(async (symNodeId: string, symbol: string, fileNodeId: string) => {
+    if (!projectPath) return
+    // Find parent file node and update its functions list
+    setNodes(prev => {
+      const fileNode = prev.find(n => n.id === fileNodeId)
+      if (!fileNode) return prev
+      const file = fileNode.data?.file as FileMapping | undefined
+      if (!file) return prev
+      const newFunctions = (file.metadata?.functions ?? []).filter(f => f !== symbol)
+      const updatedFile = { ...file, metadata: { ...file.metadata, functions: newFunctions } }
+      annotateFile(projectPath, file.file_path, { functions: newFunctions }).catch(() => {})
+      // Update file node data + remove the symbol node
+      return prev
+        .filter(n => n.id !== symNodeId)
+        .map(n => n.id === fileNodeId ? { ...n, data: { ...n.data, file: updatedFile } } : n)
+    })
+    setEdges(prev => prev.filter(e => e.target !== symNodeId))
+    toast('success', 'Symbol removed')
+  }, [projectPath])
+
   const onConnect = useCallback(async (conn: Connection) => {
     if (!projectPath || !conn.source || !conn.target) return
     try {
@@ -819,10 +1381,20 @@ export default function ArchitecturePage() {
                 selected: filePanel?.nodeId === n.id,
                 expanded: expandedFiles.has(n.id),
                 loading: loadingFiles.has(n.id),
+                syncing: syncingFiles.has(n.id),
                 onToggle: () => toggleFileNode(n.id),
+                onSync: () => handleSyncFile(n.id, n.data.file as FileMapping),
+                onUnmap: () => handleUnmapFile(n.id, n.data.file as FileMapping),
               },
             }
-            return n  // symbol nodes — data already set at creation
+            if (n.type === 'symbol') return {
+              ...n,
+              data: {
+                ...n.data,
+                onRemove: () => handleRemoveSymbol(n.id, n.data.symbol as string, n.data.fileNodeId as string),
+              },
+            }
+            return n
           })}
           edges={edges}
           onNodesChange={onNodesChange}
@@ -894,6 +1466,15 @@ export default function ArchitecturePage() {
                 title="Auto-detect imports between components"
               >
                 {inferring ? <span className="spinner" /> : <><GitBranch size={12} /> Infer Deps</>}
+              </button>
+              <div style={{ width: 1, background: 'rgba(255,255,255,0.08)', margin: '0 2px' }} />
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowIntel(v => !v)}
+                title="Graph intelligence — search, overview, trace paths"
+                style={{ color: showIntel ? '#60a5fa' : undefined, background: showIntel ? 'rgba(96,165,250,0.1)' : undefined }}
+              >
+                <Map size={12} /> Intelligence
               </button>
             </div>
           </Panel>
@@ -970,6 +1551,15 @@ export default function ArchitecturePage() {
           onDelete={() => handleDeleteComp(selected.id)}
           onUpdated={load}
           toast={toast}
+          onFileUnmapped={(filePath: string) => {
+            // Surgically remove the file node + its symbols from the graph
+            const fileNodeId = nodes.find(n => n.type === 'file' && (n.data?.file as FileMapping)?.file_path === filePath)?.id
+            if (fileNodeId) {
+              setNodes(prev => prev.filter(n => n.id !== fileNodeId && !n.id.startsWith(`sym::${fileNodeId}::`)))
+              setEdges(prev => prev.filter(e => e.target !== fileNodeId && e.source !== fileNodeId && !e.id.startsWith(`symedge::${fileNodeId}::`)))
+              setExpandedFiles(prev => { const s = new Set(prev); s.delete(fileNodeId); return s })
+            }
+          }}
         />
       )}
       {!selected && filePanel && (
@@ -977,6 +1567,14 @@ export default function ArchitecturePage() {
           file={filePanel.file}
           projectPath={projectPath}
           onClose={() => setFilePanel(null)}
+          onSync={(updated) => {
+            setFilePanel(prev => prev ? { ...prev, file: updated } : null)
+            const nodeId = filePanel.nodeId
+            setNodes(prev => prev.map(n =>
+              n.id === nodeId ? { ...n, data: { ...n.data, file: updated } } : n
+            ))
+            if (expandedFiles.has(nodeId)) refreshSymbolNodes(nodeId, updated)
+          }}
         />
       )}
       {!selected && !filePanel && symbolPanel && (
@@ -985,6 +1583,13 @@ export default function ArchitecturePage() {
           filePath={symbolPanel.filePath}
           projectPath={projectPath}
           onClose={() => setSymbolPanel(null)}
+        />
+      )}
+      {showIntel && (
+        <IntelligencePanel
+          projectPath={projectPath}
+          components={components}
+          onClose={() => setShowIntel(false)}
         />
       )}
 
@@ -1002,11 +1607,15 @@ export default function ArchitecturePage() {
 
 // ── Side panel ─────────────────────────────────────────────────────────────────
 
-function ComponentPanel({ comp, projectPath, deps, components, onClose, onDelete, onUpdated, toast }: any) {
+function ComponentPanel({ comp, projectPath, deps, components, onClose, onDelete, onUpdated, toast, onFileUnmapped }: any) {
+  const [panelWidth, resizeHandle] = usePanelResize(300)
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState({ name: comp.name, description: comp.description, layer: comp.layer })
   const [metrics, setMetrics] = useState<ComponentMetrics | null>(null)
   const [impact, setImpact] = useState<ComponentImpact | null>(null)
+  const [compFiles, setCompFiles] = useState<FileMapping[]>([])
+  const [mapInput, setMapInput] = useState('')
+  const [mapping, setMapping] = useState(false)
   const c = LAYER_COLOR[comp.layer] || '#94a3b8'
   const Icon = LAYER_ICON[comp.layer] ?? Box
 
@@ -1015,10 +1624,33 @@ function ComponentPanel({ comp, projectPath, deps, components, onClose, onDelete
     setEditing(false)
     setMetrics(null)
     setImpact(null)
-    // Fetch metrics and impact in parallel
+    setCompFiles([])
+    // Fetch metrics, impact and file list in parallel
     getComponentMetrics(projectPath, comp.id).then(setMetrics).catch(() => {})
     getComponentImpact(projectPath, comp.id).then(setImpact).catch(() => {})
+    listComponentFiles(projectPath, comp.id).then(setCompFiles).catch(() => {})
   }, [comp.id, projectPath])
+
+  const handleMapFile = async () => {
+    const fp = mapInput.trim()
+    if (!fp) return
+    setMapping(true)
+    try {
+      const added = await mapFile(projectPath, fp, comp.id)
+      setCompFiles(prev => [...prev, added])
+      setMapInput('')
+      onUpdated()
+    } catch (e: any) { toast('error', e.message) }
+    finally { setMapping(false) }
+  }
+
+  const handleUnmapCompFile = async (file: FileMapping) => {
+    try {
+      await unmapFile(projectPath, file.file_path)
+      setCompFiles(prev => prev.filter(f => f.file_path !== file.file_path))
+      onFileUnmapped?.(file.file_path)
+    } catch (e: any) { toast('error', e.message) }
+  }
 
   const nameMap: Record<string, string> = {}
   components.forEach((cc: Component) => { nameMap[cc.id] = cc.name })
@@ -1035,10 +1667,12 @@ function ComponentPanel({ comp, projectPath, deps, components, onClose, onDelete
 
   return (
     <div style={{
-      width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      width: panelWidth, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      position: 'relative',
       background: 'rgba(10,16,28,0.97)', borderLeft: '1px solid rgba(255,255,255,0.07)',
       backdropFilter: 'blur(20px)',
     }}>
+      {resizeHandle}
       {/* Colored top bar */}
       <div style={{ height: 3, background: `linear-gradient(90deg, ${c}ee, ${c}33)` }} />
 
@@ -1199,6 +1833,52 @@ function ComponentPanel({ comp, projectPath, deps, components, onClose, onDelete
                 })
               }
             </Section>
+
+            {/* ── Files ─────────────────────────────────────────────── */}
+            <Section icon={<FolderPlus size={11} />} label={`Files (${compFiles.length})`}>
+              {compFiles.map((f: FileMapping) => (
+                <div key={f.file_path} style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4, padding: '4px 7px', background: 'rgba(255,255,255,0.03)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.06)', minWidth: 0 }}>
+                  <FileCode size={9} color={c} style={{ flexShrink: 0 }} />
+                  <span style={{ flex: 1, fontSize: 10, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }} title={f.file_path}>
+                    {f.file_path.split(/[/\\]/).pop()}
+                  </span>
+                  {f.metadata?.language && (
+                    <span style={{ fontSize: 7.5, padding: '1px 4px', borderRadius: 3, background: c + '18', color: c, fontFamily: 'monospace', flexShrink: 0 }}>{f.metadata.language}</span>
+                  )}
+                  <button
+                    onClick={() => handleUnmapCompFile(f)}
+                    title="Unmap file"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#f87171', padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, opacity: 0.6 }}
+                    onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+                    onMouseLeave={e => (e.currentTarget.style.opacity = '0.6')}
+                  >
+                    <X size={9} />
+                  </button>
+                </div>
+              ))}
+              {compFiles.length === 0 && (
+                <p style={{ fontSize: 10.5, color: 'var(--text-muted)', marginBottom: 8 }}>No files mapped yet.</p>
+              )}
+              {/* Map file input */}
+              <div style={{ display: 'flex', gap: 5, marginTop: 6 }}>
+                <input
+                  type="text"
+                  placeholder="path/to/file.py"
+                  value={mapInput}
+                  onChange={e => setMapInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleMapFile()}
+                  style={{ flex: 1, fontSize: 10.5, fontFamily: 'monospace' }}
+                />
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={handleMapFile}
+                  disabled={mapping || !mapInput.trim()}
+                  style={{ flexShrink: 0 }}
+                >
+                  {mapping ? <span className="spinner" style={{ width: 10, height: 10 }} /> : <Link size={10} />}
+                </button>
+              </div>
+            </Section>
           </>
         )}
       </div>
@@ -1214,12 +1894,21 @@ function ComponentPanel({ comp, projectPath, deps, components, onClose, onDelete
 
 // ── File panel (shows on file node click) ──────────────────────────────────────
 
-function FilePanel({ file, projectPath, onClose }: { file: FileMapping; projectPath: string; onClose: () => void }) {
+function FilePanel({ file, projectPath, onClose, onSync }: {
+  file: FileMapping
+  projectPath: string
+  onClose: () => void
+  onSync?: (updated: FileMapping) => void
+}) {
+  const [panelWidth, resizeHandle] = usePanelResize(300)
   const [content, setContent] = useState<FileContent | null>(null)
   const [loadingContent, setLoadingContent] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [editingDesc, setEditingDesc] = useState(false)
+  const [descDraft, setDescDraft] = useState(file.metadata?.description ?? '')
+  const [savingDesc, setSavingDesc] = useState(false)
   const { description, functions, language } = file.metadata ?? {}
   const basename = file.file_path.split(/[/\\]/).pop() ?? file.file_path
-  const ext = file.file_path.split('.').pop() ?? ''
   const langColor = language === 'python' ? '#60a5fa'
     : language === 'typescript' ? '#34d399'
     : language === 'javascript' ? '#fbbf24'
@@ -1233,14 +1922,37 @@ function FilePanel({ file, projectPath, onClose }: { file: FileMapping; projectP
       .then(setContent)
       .catch(() => setContent(null))
       .finally(() => setLoadingContent(false))
-  }, [file.file_path, projectPath])
+    setDescDraft(file.metadata?.description ?? '')
+    setEditingDesc(false)
+  }, [file.file_path, projectPath, file.metadata?.description])
+
+  const handleSync = async () => {
+    setSyncing(true)
+    try {
+      const updated = await syncFileSymbols(projectPath, file.file_path)
+      onSync?.(updated)
+    } catch { /* silent */ }
+    finally { setSyncing(false) }
+  }
+
+  const handleSaveDesc = async () => {
+    setSavingDesc(true)
+    try {
+      const updated = await annotateFile(projectPath, file.file_path, { description: descDraft })
+      onSync?.(updated)
+      setEditingDesc(false)
+    } catch { /* silent */ }
+    finally { setSavingDesc(false) }
+  }
 
   return (
     <div style={{
-      width: 360, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      width: panelWidth, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      position: 'relative',
       background: 'rgba(8,13,24,0.98)', borderLeft: '1px solid rgba(255,255,255,0.07)',
       backdropFilter: 'blur(20px)',
     }}>
+      {resizeHandle}
       <div style={{ height: 2, background: `linear-gradient(90deg, ${langColor}cc, transparent)` }} />
 
       {/* Header */}
@@ -1250,17 +1962,47 @@ function FilePanel({ file, projectPath, onClose }: { file: FileMapping; projectP
           <div style={{ fontWeight: 700, fontSize: 12.5, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{basename}</div>
           <div style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: 'monospace', marginTop: 1 }}>{file.file_path}</div>
         </div>
+        <button
+          onClick={handleSync}
+          title="Sync symbols from actual file"
+          disabled={syncing}
+          style={{ background: 'none', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, cursor: 'pointer', color: langColor, padding: '3px 6px', display: 'flex', alignItems: 'center', gap: 4 }}
+        >
+          {syncing ? <span className="spinner" style={{ width: 10, height: 10 }} /> : <RefreshCw size={10} />}
+        </button>
         <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 4 }}><X size={13} /></button>
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {/* Description — full, untruncated */}
-        {description && (
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-            <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Description</div>
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7 }}>{description}</p>
+        {/* Description — editable */}
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', flex: 1 }}>Description</div>
+            {!editingDesc && (
+              <button onClick={() => setEditingDesc(true)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 2 }}><Edit2 size={9} /></button>
+            )}
           </div>
-        )}
+          {editingDesc ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <textarea
+                value={descDraft}
+                onChange={e => setDescDraft(e.target.value)}
+                style={{ fontSize: 11, lineHeight: 1.6, minHeight: 70, resize: 'vertical' }}
+                autoFocus
+              />
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button className="btn btn-primary btn-sm" onClick={handleSaveDesc} disabled={savingDesc}>
+                  {savingDesc ? <span className="spinner" style={{ width: 10, height: 10 }} /> : <Check size={10} />} Save
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={() => { setEditingDesc(false); setDescDraft(description ?? '') }}>Cancel</button>
+              </div>
+            </div>
+          ) : description ? (
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7, cursor: 'text' }} onClick={() => setEditingDesc(true)}>{description}</p>
+          ) : (
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', cursor: 'text', fontStyle: 'italic' }} onClick={() => setEditingDesc(true)}>Click to add description…</p>
+          )}
+        </div>
 
         {/* Functions/classes */}
         {functions && functions.length > 0 && (
@@ -1316,6 +2058,7 @@ function FilePanel({ file, projectPath, onClose }: { file: FileMapping; projectP
 // ── Symbol panel (shows on function/class node click) ──────────────────────────
 
 function SymbolPanel({ symbol, filePath, projectPath, onClose }: { symbol: string; filePath: string; projectPath: string; onClose: () => void }) {
+  const [panelWidth, resizeHandle] = usePanelResize(400)
   const [data, setData] = useState<SymbolExtract | null>(null)
   const [loading, setLoading] = useState(false)
   const isCls = !symbol.endsWith('()')
@@ -1334,10 +2077,12 @@ function SymbolPanel({ symbol, filePath, projectPath, onClose }: { symbol: strin
 
   return (
     <div style={{
-      width: 400, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      width: panelWidth, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      position: 'relative',
       background: 'rgba(8,13,24,0.98)', borderLeft: '1px solid rgba(255,255,255,0.07)',
       backdropFilter: 'blur(20px)',
     }}>
+      {resizeHandle}
       <div style={{ height: 2, background: `linear-gradient(90deg, ${isCls ? '#a855f7' : langColor}cc, transparent)` }} />
 
       {/* Header */}

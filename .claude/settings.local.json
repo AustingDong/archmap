@@ -29,7 +29,10 @@
       "mcp__archmap__project_status",
       "Bash(find:*)",
       "mcp__archmap__list_all_mappings",
-      "mcp__archmap__unmap_file"
+      "mcp__archmap__unmap_file",
+      "Bash(npx tsc:*)",
+      "Bash(cd ui:*)",
+      "Bash(./node_modules/.bin/tsc --noEmit 2>&1)"
     ]
   }
 }

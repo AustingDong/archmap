@@ -35,6 +35,30 @@ def extract_symbol(project_path: str, file_path: str, symbol_name: str) -> dict:
                 "start_line": 1, "end_line": len(lines), "language": ext.lstrip(".")}
 
 
+def extract_all_symbols(project_path: str, file_path: str) -> dict:
+    """
+    Extract all top-level functions and classes from a source file.
+    Returns: {symbols: [str], language: str}
+    Symbol names follow the metadata.functions convention: "name()" for functions, "Name" for classes.
+    """
+    root = Path(project_path)
+    fp = root / file_path
+    try:
+        source = fp.read_text(encoding="utf-8", errors="replace")
+    except (OSError, FileNotFoundError):
+        return {"symbols": [], "language": ""}
+
+    ext = fp.suffix.lower()
+
+    if ext == ".py":
+        return _extract_all_python(source)
+    elif ext in {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}:
+        lang = "typescript" if ext in {".ts", ".tsx"} else "javascript"
+        return _extract_all_ts(source, lang)
+    else:
+        return {"symbols": [], "language": ext.lstrip(".")}
+
+
 def get_file_content(project_path: str, file_path: str) -> dict:
     root = Path(project_path)
     fp = root / file_path
@@ -108,6 +132,42 @@ def _extract_ts(source: str, file_path: str, name: str, language: str) -> dict:
                     "start_line": start + 1, "end_line": end, "language": language}
 
     return _fallback_search(source, file_path, name, language)
+
+
+# ── Extract-all helpers ────────────────────────────────────────────────────────
+
+def _extract_all_python(source: str) -> dict:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {"symbols": [], "language": "python"}
+    symbols = []
+    for node in tree.body:  # top-level only — not ast.walk
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            symbols.append(f"{node.name}()")
+        elif isinstance(node, ast.ClassDef):
+            symbols.append(node.name)
+    return {"symbols": symbols, "language": "python"}
+
+
+_TS_ALL_DEF = re.compile(
+    r"^(?:export\s+)?(?:default\s+)?(?:async\s+)?"
+    r"(?:function|class|const|let|var)\s+(\w+)"
+)
+
+
+def _extract_all_ts(source: str, language: str) -> dict:
+    symbols = []
+    seen: set[str] = set()
+    for line in source.splitlines():
+        m = _TS_ALL_DEF.match(line.lstrip())
+        if m:
+            name = m.group(1)
+            if name not in seen:
+                seen.add(name)
+                # Heuristic: class if starts with uppercase, function if lowercase
+                symbols.append(name if name[0].isupper() else f"{name}()")
+    return {"symbols": symbols, "language": language}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

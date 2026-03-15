@@ -123,3 +123,51 @@ export interface SymbolExtract {
   language: string
   fallback?: boolean
 }
+
+export interface SymbolSearchResult {
+  symbol: string
+  file_path: string
+  component_id: string
+}
+
+export interface CodingContext {
+  component: Component
+  files: FileMapping[]
+  dependencies: Array<Dependency & { from_name: string; to_name: string }>
+  plan_items: PlanItem[]
+}
+
+export interface RelatedSearchResult {
+  query: string
+  summary: string
+  components: Array<{ id: string; name: string; layer: string; description: string; confidence: string }>
+  files: Array<{ file_path: string; component_id: string; component_name: string; language: string; description: string }>
+  symbols: Array<{ symbol: string; file_path: string; component_id: string; component_name: string }>
+}
+
+export interface SymbolIndexEntry {
+  symbol: string
+  file_path: string
+  language: string
+  component_id: string
+  component_name: string
+  component_layer: string
+}
+
+export interface PathTrace {
+  found: boolean
+  length?: number
+  text?: string
+  error?: string
+  from_component?: string
+  from_name?: string
+  to_component?: string
+  to_name?: string
+  path: Array<{
+    component_id: string
+    component_name: string
+    layer: string
+    via_dependency: { id: string; label: string; kind: string; confidence: string } | null
+    files: string[]
+  }>
+}
