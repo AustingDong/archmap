@@ -2,7 +2,34 @@
   "permissions": {
     "allow": [
       "Bash(cd:*)",
-      "Bash(conda run:*)"
+      "Bash(conda run:*)",
+      "Bash(claude mcp:*)",
+      "mcp__archmap__get_architecture",
+      "mcp__archmap__list_components",
+      "mcp__archmap__delete_component",
+      "mcp__archmap__add_component",
+      "mcp__archmap__add_dependency",
+      "mcp__archmap__bulk_map",
+      "mcp__archmap__create_plan_item",
+      "mcp__archmap__update_plan_item",
+      "mcp__archmap__list_plan_items",
+      "mcp__archmap__map_file",
+      "mcp__ide__getDiagnostics",
+      "Bash(curl:*)",
+      "Bash(python:*)",
+      "Bash(netstat:*)",
+      "Bash(node:*)",
+      "Bash(npm install:*)",
+      "Bash(for id:*)",
+      "WebSearch",
+      "WebFetch(domain:reactflow.dev)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:blog.logrocket.com)",
+      "mcp__archmap__project_status",
+      "Bash(find:*)",
+      "mcp__archmap__list_all_mappings",
+      "mcp__archmap__unmap_file"
     ]
   }
 }

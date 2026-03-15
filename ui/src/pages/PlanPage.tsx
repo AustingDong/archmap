@@ -39,6 +39,47 @@ export default function PlanPage() {
 
   useEffect(() => { load() }, [load])
 
+  // Live updates via SSE — fall back to 5s polling if EventSource unavailable
+  useEffect(() => {
+    if (!projectPath) return
+
+    const refresh = async () => {
+      try {
+        const its = await listPlanItems(projectPath)
+        setItems(prev => {
+          const openId = selected?.id
+          return its.map(s => s.id === openId ? (prev.find(p => p.id === openId) ?? s) : s)
+        })
+      } catch { /* silent */ }
+    }
+
+    let es: EventSource | null = null
+    let fallback: ReturnType<typeof setInterval> | null = null
+
+    if (typeof EventSource !== 'undefined') {
+      es = new EventSource('/api/events')
+      es.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data)
+          if (msg.event === 'plan_changed') refresh()
+        } catch { /* ignore */ }
+      }
+      es.onerror = () => {
+        // SSE dropped — switch to polling until next mount
+        es?.close()
+        es = null
+        fallback = setInterval(refresh, 5000)
+      }
+    } else {
+      fallback = setInterval(refresh, 5000)
+    }
+
+    return () => {
+      es?.close()
+      if (fallback) clearInterval(fallback)
+    }
+  }, [projectPath, selected?.id])
+
   const moveItem = async (item: PlanItem, newStatus: PlanStatus) => {
     try {
       await updatePlanItem(projectPath, item.id, { status: newStatus })
@@ -179,6 +220,14 @@ export default function PlanPage() {
   )
 }
 
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function isRecentlyAgentUpdated(item: PlanItem): boolean {
+  if (item.status !== 'in_progress') return false
+  const updatedMs = new Date(item.updated_at).getTime()
+  return Date.now() - updatedMs < 30_000
+}
+
 // ── Task Card ──────────────────────────────────────────────────────────────────
 
 function TaskCard({ item, compName, columns, onClick, onMove, onDelete, selected }: {
@@ -209,12 +258,19 @@ function TaskCard({ item, compName, columns, onClick, onMove, onDelete, selected
       onMouseEnter={e => { if (!selected) (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border-bright)' }}
       onMouseLeave={e => { if (!selected) (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--border)' }}
     >
-      {/* Priority + menu */}
+      {/* Priority + agent badge + component */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
         <span style={{
           fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 10,
           background: pc + '22', color: pc, letterSpacing: '0.03em',
         }}>{item.priority}</span>
+        {isRecentlyAgentUpdated(item) && (
+          <span style={{
+            fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 10,
+            background: '#4f7cff22', color: '#4f7cff',
+            animation: 'pulse 1.5s ease-in-out infinite',
+          }}>agent working</span>
+        )}
         {compName && (
           <span style={{ fontSize: 10, color: 'var(--text-muted)', background: 'var(--bg-raised)', padding: '1px 6px', borderRadius: 4, marginLeft: 'auto' }}>
             {compName}

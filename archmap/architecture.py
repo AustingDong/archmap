@@ -113,6 +113,7 @@ def add_dependency(
     to_component: str,
     label: str = "uses",
     kind: str = "runtime",
+    confidence: str = "confirmed",
 ) -> dict:
     # Validate both components exist
     arch = load_arch(project_path)
@@ -122,7 +123,10 @@ def add_dependency(
     if to_component not in ids:
         raise NotFoundError(f"Component not found: {to_component}")
 
-    dep = Dependency.new(from_component=from_component, to_component=to_component, label=label, kind=kind)
+    dep = Dependency.new(
+        from_component=from_component, to_component=to_component,
+        label=label, kind=kind, confidence=confidence,
+    )
     dep_dict = dep.to_dict()
 
     def _mutate(data):
@@ -179,6 +183,7 @@ def get_dependency_graph(project_path: str) -> dict:
             "target": d["to_component"],
             "label": d.get("label", "uses"),
             "kind": d.get("kind", "runtime"),
+            "confidence": d.get("confidence", "confirmed"),
         }
         for d in dependencies
     ]

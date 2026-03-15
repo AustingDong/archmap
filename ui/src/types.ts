@@ -23,6 +23,7 @@ export interface Dependency {
   to_component: string
   label: string
   kind: DepKind
+  confidence: 'auto' | 'confirmed'
   created_at: string
 }
 
@@ -31,6 +32,7 @@ export interface FileMapping {
   component_id: string
   mapped_at: string
   mapped_by: string
+  metadata: { description?: string; functions?: string[]; language?: string }
 }
 
 export interface PlanItem {
@@ -76,4 +78,48 @@ export interface ProjectStatus {
   mapped_files: number
   plan_items: number
   plan_open: number
+}
+
+export interface FileMetrics {
+  file_path: string
+  lines: number
+  complexity: number
+  churn: number
+  hotspot: boolean
+}
+
+export interface ComponentMetrics {
+  component_id: string
+  file_count: number
+  total_lines: number
+  avg_complexity: number
+  total_churn: number
+  hotspot: boolean
+  files: FileMetrics[]
+}
+
+export interface ComponentImpact {
+  component_id: string
+  upstream: string[]    // components that depend ON this (would break if it changes)
+  downstream: string[]  // components this depends ON
+  cycles: string[]
+  is_leaf: boolean
+  is_root: boolean
+  impact_score: number
+}
+
+export interface FileContent {
+  file_path: string
+  content: string
+  lines: number
+}
+
+export interface SymbolExtract {
+  symbol: string
+  file_path: string
+  code: string
+  start_line: number
+  end_line: number
+  language: string
+  fallback?: boolean
 }

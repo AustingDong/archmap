@@ -1,3 +1,4 @@
+
 """
 ArchMap MCP Server — exposes all ArchMap tools via Model Context Protocol.
 Transport: stdio (works with Claude Code, Cursor, OpenClaw, any MCP client).
@@ -19,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from mcp.server.fastmcp import FastMCP
 
 import archmap.architecture as arch_mod
+import archmap.inference as infer_mod
 import archmap.mapping as map_mod
 import archmap.planning as plan_mod
 import archmap.project as proj_mod
@@ -281,6 +283,71 @@ def list_all_mappings(project_path: str) -> str:
     """List all file-to-component mappings in the project."""
     try:
         return _ok(map_mod.list_all_mappings(project_path))
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def annotate_file(
+    project_path: str,
+    file_path: str,
+    description: str = "",
+    functions: str = "",
+    language: str = "",
+) -> str:
+    """
+    Annotate a mapped file with description, key functions/classes, and language.
+    Call after map_file to enrich the architecture with implementation details.
+
+    functions: comma-separated list of key functions/classes (e.g. "authenticate(), UserModel, validate_token()")
+    language: programming language (e.g. "python", "typescript")
+    """
+    try:
+        metadata: dict = {}
+        if description:
+            metadata["description"] = description
+        if functions:
+            metadata["functions"] = [f.strip() for f in functions.split(",") if f.strip()]
+        if language:
+            metadata["language"] = language
+        return _ok(map_mod.update_file_metadata(project_path, file_path, metadata))
+    except NotFoundError as e:
+        return _err(str(e))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ─── Inference tools ──────────────────────────────────────────────────────────
+
+@mcp.tool()
+def infer_dependencies(project_path: str, overwrite_auto: bool = False) -> str:
+    """
+    Scan all mapped files for import statements and auto-detect cross-component
+    dependencies. Adds inferred deps with confidence='auto' (shown as dashed
+    edges in the UI). Confirmed deps are never overwritten.
+
+    overwrite_auto: if True, refresh previously auto-inferred deps.
+
+    Returns: {added, skipped, unmapped, dependencies}
+    - added       — new deps written to architecture.json
+    - skipped     — pairs that already had a confirmed dep
+    - unmapped    — files that are imported but not yet mapped to a component
+    - dependencies — the dep objects that were added
+    """
+    try:
+        return _ok(infer_mod.infer_dependencies(project_path, overwrite_auto=overwrite_auto))
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def confirm_dependency(project_path: str, dependency_id: str) -> str:
+    """
+    Promote an auto-inferred dependency to confirmed.
+    Use this after reviewing an inferred dep to mark it as intentional.
+    """
+    try:
+        return _ok(infer_mod.confirm_dependency(project_path, dependency_id))
     except Exception as e:
         return _err(str(e))
 

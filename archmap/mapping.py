@@ -25,6 +25,7 @@ def map_file(
         "component_id": component_id,
         "mapped_at": _ts(),
         "mapped_by": mapped_by,
+        "metadata": {},
     }
 
     def _mutate(data):
@@ -56,12 +57,29 @@ def get_file_component(project_path: str, file_path: str) -> Optional[dict]:
     return {"file_path": rel, **record}
 
 
-def list_component_files(project_path: str, component_id: str) -> list[str]:
+def list_component_files(project_path: str, component_id: str) -> list[dict]:
     data = load_mappings(project_path)
     return [
-        fp for fp, rec in data.get("files", {}).items()
+        {"file_path": fp, **rec}
+        for fp, rec in data.get("files", {}).items()
         if rec.get("component_id") == component_id
     ]
+
+
+def update_file_metadata(project_path: str, file_path: str, metadata: dict) -> dict:
+    rel = normalize_path(project_path, file_path)
+
+    result: dict = {}
+
+    def _mutate(data):
+        files = data.get("files", {})
+        if rel not in files:
+            raise NotFoundError(f"No mapping for: {rel}")
+        files[rel].setdefault("metadata", {}).update(metadata)
+        result.update({"file_path": rel, **files[rel]})
+
+    mutate_mappings(project_path, _mutate)
+    return result
 
 
 def bulk_map(

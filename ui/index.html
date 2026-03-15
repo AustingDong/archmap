@@ -100,6 +100,32 @@
       @keyframes spin { to { transform: rotate(360deg); } }
       @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
       @keyframes pulseGlow { 0%,100% { box-shadow: 0 0 0 0 rgba(79,124,255,0); } 50% { box-shadow: 0 0 0 4px rgba(79,124,255,0.2); } }
+      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+      @keyframes node-appear { from { opacity: 0; transform: scale(0.88); } to { opacity: 1; transform: scale(1); } }
+      @keyframes shine { 0% { left: -100%; } 100% { left: 200%; } }
+
+      /* ReactFlow — strip default node chrome */
+      .react-flow__node { padding: 0 !important; border: none !important; background: none !important; }
+      .react-flow__node.selected > div { outline: none; }
+
+      /* Handles — invisible interaction targets */
+      .react-flow__handle { opacity: 0 !important; width: 12px !important; height: 12px !important; }
+
+      /* Edge hover glow */
+      .react-flow__edge:hover .rf-edge-main { filter: drop-shadow(0 0 5px currentColor); }
+
+      /* Controls dark theme */
+      .react-flow__controls-button {
+        background: var(--bg-card) !important;
+        border-color: var(--border) !important;
+        color: var(--text-secondary) !important;
+        fill: var(--text-secondary) !important;
+      }
+      .react-flow__controls-button:hover {
+        background: var(--bg-hover) !important;
+        color: var(--text-primary) !important;
+        fill: var(--text-primary) !important;
+      }
 
       .fade-in { animation: fadeIn 0.2s ease; }
 

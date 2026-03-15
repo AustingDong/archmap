@@ -82,6 +82,7 @@ class Dependency:
     to_component: str
     label: str = "uses"
     kind: DependencyKind = "runtime"
+    confidence: Confidence = "confirmed"
     created_at: str = field(default_factory=_now)
 
     @staticmethod
@@ -95,6 +96,7 @@ class Dependency:
             "to_component": self.to_component,
             "label": self.label,
             "kind": self.kind,
+            "confidence": self.confidence,
             "created_at": self.created_at,
         }
 
@@ -106,6 +108,7 @@ class Dependency:
             to_component=d["to_component"],
             label=d.get("label", "uses"),
             kind=d.get("kind", "runtime"),
+            confidence=d.get("confidence", "confirmed"),
             created_at=d.get("created_at", _now()),
         )
 
@@ -118,12 +121,14 @@ class FileMapping:
     component_id: str
     mapped_at: str = field(default_factory=_now)
     mapped_by: str = "user"  # "user" | "scanner" | agent name
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
             "component_id": self.component_id,
             "mapped_at": self.mapped_at,
             "mapped_by": self.mapped_by,
+            "metadata": self.metadata,
         }
 
     @staticmethod
@@ -133,6 +138,7 @@ class FileMapping:
             component_id=d["component_id"],
             mapped_at=d.get("mapped_at", _now()),
             mapped_by=d.get("mapped_by", "user"),
+            metadata=d.get("metadata", {}),
         )
 
 

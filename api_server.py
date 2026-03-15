@@ -8,29 +8,49 @@ Usage:
     python api_server.py
 """
 import asyncio
+import json
 import sys
+import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from typing import AsyncGenerator
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import uvicorn
 
 import archmap.architecture as arch_mod
+import archmap.inference as infer_mod
 import archmap.mapping as map_mod
+import archmap.metrics as metrics_mod
 import archmap.planning as plan_mod
 import archmap.project as proj_mod
 import archmap.scanner as scan_mod
+import archmap.symbols as symbols_mod
 from archmap.models import ArchMapError, NotFoundError
 from archmap import __version__
 
 _executor = ThreadPoolExecutor(max_workers=4)
 
 app = FastAPI(title="ArchMap API", version=__version__, docs_url="/api/docs")
+
+# ─── SSE pub/sub ──────────────────────────────────────────────────────────────
+
+_subscribers: set[asyncio.Queue] = set()
+
+def _notify(event: str, data: dict | None = None) -> None:
+    """Broadcast an SSE event to all connected clients (fire-and-forget)."""
+    payload = json.dumps({"event": event, **(data or {})})
+    for q in list(_subscribers):
+        try:
+            q.put_nowait(payload)
+        except asyncio.QueueFull:
+            pass  # slow client — drop the event
 
 app.add_middleware(
     CORSMiddleware,
@@ -82,6 +102,13 @@ class MapFileReq(BaseModel):
     file_path: str
     component_id: str
 
+class AnnotateFileReq(BaseModel):
+    project_path: str
+    file_path: str
+    description: str = ""
+    functions: List[str] = []
+    language: str = ""
+
 class CreatePlanReq(BaseModel):
     project_path: str
     title: str
@@ -114,6 +141,38 @@ class ToolCall(BaseModel):
 @app.get("/api/health")
 def health():
     return {"status": "ok", "version": __version__}
+
+
+# ─── Server-Sent Events ───────────────────────────────────────────────────────
+
+@app.get("/api/events")
+async def events(request: Request):
+    """
+    SSE stream. Clients receive push events instead of polling.
+    Events: plan_changed, mappings_changed, architecture_changed
+    Heartbeat every 15s to keep the connection alive through proxies.
+    """
+    q: asyncio.Queue = asyncio.Queue(maxsize=64)
+    _subscribers.add(q)
+
+    async def stream() -> AsyncGenerator[str, None]:
+        try:
+            yield "data: {\"event\": \"connected\"}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    payload = await asyncio.wait_for(q.get(), timeout=15.0)
+                    yield f"data: {payload}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"  # keeps connection alive
+        finally:
+            _subscribers.discard(q)
+
+    return StreamingResponse(stream(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    })
 
 
 # ─── Project ──────────────────────────────────────────────────────────────────
@@ -242,17 +301,39 @@ async def list_component_files(project_path: str, component_id: str):
     except ArchMapError as e:
         raise HTTPException(400, str(e))
 
+@app.patch("/api/mappings")
+async def annotate_file(req: AnnotateFileReq):
+    metadata: dict = {}
+    if req.description:
+        metadata["description"] = req.description
+    if req.functions:
+        metadata["functions"] = req.functions
+    if req.language:
+        metadata["language"] = req.language
+    try:
+        result = await _run_sync(map_mod.update_file_metadata, req.project_path, req.file_path, metadata)
+        _notify("mappings_changed")
+        return result
+    except NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
 @app.post("/api/mappings")
 async def map_file(req: MapFileReq):
     try:
-        return await _run_sync(map_mod.map_file, req.project_path, req.file_path, req.component_id)
+        result = await _run_sync(map_mod.map_file, req.project_path, req.file_path, req.component_id)
+        _notify("mappings_changed")
+        return result
     except ArchMapError as e:
         raise HTTPException(400, str(e))
 
 @app.delete("/api/mappings")
 async def unmap_file(project_path: str, file_path: str):
     try:
-        return await _run_sync(map_mod.unmap_file, project_path, file_path)
+        result = await _run_sync(map_mod.unmap_file, project_path, file_path)
+        _notify("mappings_changed")
+        return result
     except NotFoundError as e:
         raise HTTPException(404, str(e))
     except ArchMapError as e:
@@ -274,21 +355,25 @@ async def list_plan_items(project_path: str, component_id: str = "", status: str
 @app.post("/api/plan")
 async def create_plan_item(req: CreatePlanReq):
     try:
-        return await _run_sync(
+        result = await _run_sync(
             plan_mod.create_plan_item,
             req.project_path, req.title, req.description,
             req.component_id, req.priority, req.status, req.tags,
         )
+        _notify("plan_changed")
+        return result
     except ArchMapError as e:
         raise HTTPException(400, str(e))
 
 @app.patch("/api/plan/{item_id}")
 async def update_plan_item(item_id: str, project_path: str, req: UpdatePlanReq):
     try:
-        return await _run_sync(
+        result = await _run_sync(
             plan_mod.update_plan_item, project_path, item_id,
             **{k: v for k, v in req.model_dump().items() if v is not None}
         )
+        _notify("plan_changed")
+        return result
     except NotFoundError as e:
         raise HTTPException(404, str(e))
     except ArchMapError as e:
@@ -297,7 +382,33 @@ async def update_plan_item(item_id: str, project_path: str, req: UpdatePlanReq):
 @app.delete("/api/plan/{item_id}")
 async def delete_plan_item(project_path: str, item_id: str):
     try:
-        return await _run_sync(plan_mod.delete_plan_item, project_path, item_id)
+        result = await _run_sync(plan_mod.delete_plan_item, project_path, item_id)
+        _notify("plan_changed")
+        return result
+    except NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── Inference ────────────────────────────────────────────────────────────────
+
+@app.post("/api/infer/dependencies")
+async def infer_dependencies(project_path: str, overwrite_auto: bool = False):
+    try:
+        result = await _run_sync(infer_mod.infer_dependencies, project_path, overwrite_auto)
+        if result["added"] > 0:
+            _notify("architecture_changed")
+        return result
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+@app.post("/api/dependencies/{dep_id}/confirm")
+async def confirm_dependency(dep_id: str, project_path: str):
+    try:
+        result = await _run_sync(infer_mod.confirm_dependency, project_path, dep_id)
+        _notify("architecture_changed")
+        return result
     except NotFoundError as e:
         raise HTTPException(404, str(e))
     except ArchMapError as e:
@@ -318,6 +429,95 @@ async def scan_project(req: ScanReq):
         raise HTTPException(404, str(e))
     except ArchMapError as e:
         raise HTTPException(400, str(e))
+
+
+# ─── Metrics ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/metrics/component/{component_id}")
+async def get_component_metrics(component_id: str, project_path: str):
+    try:
+        return await _run_sync(metrics_mod.get_component_metrics, project_path, component_id)
+    except NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── Impact analysis ──────────────────────────────────────────────────────────
+
+@app.get("/api/impact/{component_id}")
+async def get_component_impact(component_id: str, project_path: str):
+    """
+    BFS impact analysis: given a component, return:
+    - upstream: components that depend ON this component (would break if it changes)
+    - downstream: components this component depends ON
+    - cycles: any dependency cycle involving this component
+    - is_leaf: no outgoing deps
+    - is_root: no incoming deps
+    """
+    try:
+        arch = await _run_sync(arch_mod.get_architecture, project_path)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+    deps = arch.get("dependencies", [])
+    comp_ids = {c["id"] for c in arch.get("components", [])}
+
+    if component_id not in comp_ids:
+        raise HTTPException(404, f"Component {component_id!r} not found")
+
+    # Build adjacency maps
+    outgoing: dict[str, list[str]] = {cid: [] for cid in comp_ids}  # from → [to]
+    incoming: dict[str, list[str]] = {cid: [] for cid in comp_ids}  # to → [from]
+    for d in deps:
+        f, t = d["from_component"], d["to_component"]
+        if f in outgoing:
+            outgoing[f].append(t)
+        if t in incoming:
+            incoming[t].append(f)
+
+    def bfs(adjacency: dict[str, list[str]], start: str) -> set[str]:
+        visited: set[str] = set()
+        queue = [start]
+        while queue:
+            cur = queue.pop(0)
+            for nxt in adjacency.get(cur, []):
+                if nxt not in visited and nxt != start:
+                    visited.add(nxt)
+                    queue.append(nxt)
+        return visited
+
+    downstream = bfs(outgoing, component_id)   # this → ... (what it depends on)
+    upstream   = bfs(incoming, component_id)   # ... → this (what depends on it)
+
+    # Cycle detection: downstream nodes that also have a path back
+    cycles = [cid for cid in downstream if component_id in bfs(outgoing, cid)]
+
+    return {
+        "component_id": component_id,
+        "upstream":    sorted(upstream),     # will break if this component changes
+        "downstream":  sorted(downstream),   # this component depends on these
+        "cycles":      sorted(cycles),
+        "is_leaf":     len(outgoing.get(component_id, [])) == 0,
+        "is_root":     len(incoming.get(component_id, [])) == 0,
+        "impact_score": len(upstream),       # how many components would be affected
+    }
+
+
+# ─── File content + symbol extraction ────────────────────────────────────────
+
+@app.get("/api/file")
+async def get_file_content(project_path: str, file_path: str):
+    """Return raw file content as text."""
+    try:
+        return await _run_sync(symbols_mod.get_file_content, project_path, file_path)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+@app.get("/api/file/symbol")
+async def get_file_symbol(project_path: str, file_path: str, symbol: str):
+    """Extract source code of a named function or class from a file."""
+    return await _run_sync(symbols_mod.extract_symbol, project_path, file_path, symbol)
 
 
 # ─── Legacy generic tool endpoint (backward-compatible) ───────────────────────

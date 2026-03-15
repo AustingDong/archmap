@@ -8,6 +8,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^2.0.4",
     "@xyflow/react": "^12.3.6",
     "lucide-react": "^0.577.0",
     "react": "^18.3.1",

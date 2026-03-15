@@ -90,19 +90,36 @@ export const addDependency = (project_path: string, from_component: string, to_c
 export const removeDependency = (project_path: string, dep_id: string) =>
   del<string>(`${BASE}/dependencies/${dep_id}`, { project_path })
 
+export const inferDependencies = (project_path: string, overwrite_auto = false) =>
+  post<{ added: number; skipped: number; unmapped: string[]; dependencies: import('../types').Dependency[] }>(
+    `/infer/dependencies?project_path=${encodeURIComponent(project_path)}&overwrite_auto=${overwrite_auto}`, {}
+  )
+
+export const confirmDependency = (project_path: string, dep_id: string) =>
+  post<import('../types').Dependency>(
+    `/dependencies/${dep_id}/confirm?project_path=${encodeURIComponent(project_path)}`, {}
+  )
+
 // ─── Mappings ─────────────────────────────────────────────────────────────────
 
 export const listAllMappings = (project_path: string) =>
   get<import('../types').FileMapping[]>(`${BASE}/mappings`, { project_path })
 
 export const listComponentFiles = (project_path: string, component_id: string) =>
-  get<string[]>(`${BASE}/mappings/component/${component_id}`, { project_path })
+  get<import('../types').FileMapping[]>(`${BASE}/mappings/component/${component_id}`, { project_path })
 
 export const mapFile = (project_path: string, file_path: string, component_id: string) =>
   post<import('../types').FileMapping>('/mappings', { project_path, file_path, component_id })
 
 export const unmapFile = (project_path: string, file_path: string) =>
   del<string>(`${BASE}/mappings`, { project_path, file_path })
+
+export const annotateFile = (
+  project_path: string,
+  file_path: string,
+  data: { description?: string; functions?: string[]; language?: string },
+) =>
+  patch<import('../types').FileMapping>(`${BASE}/mappings`, {}, { project_path, file_path, ...data })
 
 // ─── Planning ─────────────────────────────────────────────────────────────────
 
@@ -129,3 +146,23 @@ export const scanProject = (project_path: string, overwrite_auto = false, depth 
   post<{ components_created: number; components: string[]; files_mapped: number; message: string }>(
     '/scan', { project_path, overwrite_auto, depth }
   )
+
+// ─── Metrics ──────────────────────────────────────────────────────────────────
+
+export const getComponentMetrics = (project_path: string, component_id: string) =>
+  get<import('../types').ComponentMetrics>(
+    `${BASE}/metrics/component/${component_id}`, { project_path }
+  )
+
+export const getComponentImpact = (project_path: string, component_id: string) =>
+  get<import('../types').ComponentImpact>(
+    `${BASE}/impact/${component_id}`, { project_path }
+  )
+
+// ─── File content + symbol extraction ─────────────────────────────────────────
+
+export const getFileContent = (project_path: string, file_path: string) =>
+  get<import('../types').FileContent>(`${BASE}/file`, { project_path, file_path })
+
+export const getFileSymbol = (project_path: string, file_path: string, symbol: string) =>
+  get<import('../types').SymbolExtract>(`${BASE}/file/symbol`, { project_path, file_path, symbol })
