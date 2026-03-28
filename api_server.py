@@ -35,6 +35,7 @@ import archmap.inference as infer_mod
 import archmap.intelligence as intel_mod
 import archmap.mapping as map_mod
 import archmap.metrics as metrics_mod
+import archmap.quality as quality_mod
 import archmap.migration as migration_mod
 import archmap.planning as plan_mod
 import archmap.project as proj_mod
@@ -565,6 +566,24 @@ async def scan_project(req: ScanReq):
 async def get_component_metrics(component_id: str, project_path: str):
     try:
         return await _run_sync(metrics_mod.get_component_metrics, project_path, component_id)
+    except NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/quality/{component_id}")
+async def get_code_quality(
+    component_id: str,
+    project_path: str,
+    include_types: bool = False,
+):
+    """Lint + type-check + complexity report for a component's source files."""
+    try:
+        return await _run_sync(
+            quality_mod.get_quality_report, project_path, component_id,
+            include_types=include_types,
+        )
     except NotFoundError as e:
         raise HTTPException(404, str(e))
     except ArchMapError as e:

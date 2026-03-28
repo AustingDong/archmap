@@ -29,6 +29,7 @@ import archmap.inference as infer_mod
 import archmap.intelligence as intel_mod
 import archmap.mapping as map_mod
 import archmap.metrics as metrics_mod
+import archmap.quality as quality_mod
 import archmap.migration as migration_mod
 import archmap.planning as plan_mod
 import archmap.project as proj_mod
@@ -1205,6 +1206,7 @@ def get_generation_context(
 
 # ─── Metrics & impact ─────────────────────────────────────────────────────────
 
+@mcp.tool()
 def get_component_metrics(project_path: str, component_id: str) -> str:
     """
     Return code quality metrics for a component: line count, keyword complexity,
@@ -1218,6 +1220,42 @@ def get_component_metrics(project_path: str, component_id: str) -> str:
     """
     try:
         return _ok(metrics_mod.get_component_metrics(project_path, component_id))
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def check_code_quality(
+    project_path: str,
+    component_id: str,
+    include_types: bool = False,
+) -> str:
+    """
+    Run lint (ruff) and optional type-check (mypy) on all Python files in a
+    component and return a structured quality report.
+
+    Returns:
+      score          — 0-100, 100 = no issues
+      lint_issues    — ruff violations with file, line, code, message
+      format_issues  — files that need ruff format
+      type_issues    — mypy errors (only if include_types=True)
+      hotspots       — files that are both complex AND have lint errors
+      fix_priority   — ordered list of files to fix first
+      summary        — one-line text: "N file(s), score X/100 — N error(s)"
+
+    Agent workflow:
+      1. check_code_quality(component_id) before starting work
+      2. Fix any errors in fix_priority order
+      3. post_edit_sync after each fix
+      4. check_code_quality again to confirm clean
+
+    Note: Only Python files are linted. TypeScript files need eslint (run
+    `npm run lint` in the ui/ directory).
+    """
+    try:
+        return _ok(quality_mod.get_quality_report(
+            project_path, component_id, include_types=include_types
+        ))
     except Exception as e:
         return _err(str(e))
 

@@ -70,7 +70,7 @@ def get_component_metrics(project_path: str, component_id: str) -> dict:
     file_metrics: list[dict] = []
     for f in files:
         fp = root / f["file_path"]
-        lang = (f.get("metadata") or {}).get("language", "")
+        lang = f.get("language", "") or (f.get("metadata") or {}).get("language", "")
         lines = _line_count(fp)
         complexity = _keyword_complexity(fp, lang)
         churn = _git_churn(root, f["file_path"])

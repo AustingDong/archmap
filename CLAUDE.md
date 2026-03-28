@@ -74,6 +74,36 @@ Shows upstream (breaks if you change this) and downstream (what this depends on)
 
 ---
 
+## Code quality — check before and after every edit
+
+```
+check_code_quality(project_path="...", component_id="<comp_id>")
+# include_types=True to also run mypy type checking
+```
+
+Returns: `score` (0–100), `lint_issues` (ruff), `format_issues`, `type_issues`,
+`fix_priority` (files ordered by severity), `hotspots` (complex + dirty files).
+
+**Agent workflow for quality:**
+1. `check_code_quality` before starting — understand the baseline
+2. Fix errors in `fix_priority` order before adding new code
+3. `post_edit_sync` after each fix to keep the graph current
+4. `check_code_quality` again at the end — score must not decrease
+
+**For TypeScript files**, run `npm run lint` in `ui/` (uses ESLint):
+```bash
+cd C:/Users/a7don/my_projects/archmap/ui && npm run lint
+```
+
+**Augmenting code quality** — agents are authorized to proactively fix:
+- Ruff lint errors (E/W codes) — always fix
+- Unused imports, undefined names — always fix
+- Formatting (`ruff format`) — fix if touching the file anyway
+- Type errors (mypy) — fix if the fix is local and non-breaking
+- Do NOT change public APIs or restructure modules without an ADR
+
+---
+
 ## Checking architectural health before a large change
 
 ```

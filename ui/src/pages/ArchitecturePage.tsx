@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ReactFlow,
   Background, Controls, MiniMap,
@@ -174,13 +174,70 @@ function ConnectionLine({ fromX, fromY, fromPosition, toX, toY, toPosition }: Co
   )
 }
 
+// ── C4 Breadcrumb navigation bar ──────────────────────────────────────────────
+
+function BreadcrumbNav({
+  navStack, onNavigate,
+}: {
+  navStack: Array<{ id: string; name: string; layer: string }>
+  onNavigate: (index: number) => void
+}) {
+  const crumbStyle: React.CSSProperties = {
+    fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: '3px 8px', borderRadius: 6,
+    transition: 'background 0.15s, color 0.15s',
+    color: 'rgba(255,255,255,0.55)',
+    background: 'none', border: 'none',
+  }
+  const activeCrumbStyle: React.CSSProperties = {
+    ...crumbStyle,
+    color: '#f0f7ff', cursor: 'default',
+    background: 'rgba(255,255,255,0.07)',
+  }
+  const sepStyle: React.CSSProperties = {
+    fontSize: 10, color: 'rgba(255,255,255,0.2)', margin: '0 1px', userSelect: 'none',
+  }
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 2,
+      background: 'rgba(13,20,33,0.88)', backdropFilter: 'blur(12px)',
+      border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10,
+      padding: '4px 10px', boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+      maxWidth: 600, overflow: 'hidden',
+    }}>
+      <button style={navStack.length === 0 ? activeCrumbStyle : crumbStyle} onClick={() => onNavigate(-1)}>
+        <Layers size={10} style={{ marginRight: 4, verticalAlign: 'middle', opacity: 0.7 }} />
+        Domains
+      </button>
+      {navStack.map((crumb, i) => {
+        const c = LAYER_COLOR[crumb.layer] || '#94a3b8'
+        const isLast = i === navStack.length - 1
+        return (
+          <React.Fragment key={crumb.id}>
+            <span style={sepStyle}>›</span>
+            <button
+              style={isLast ? { ...activeCrumbStyle, color: c } : crumbStyle}
+              onClick={() => !isLast && onNavigate(i)}
+            >
+              {crumb.name}
+            </button>
+          </React.Fragment>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── Custom component node ──────────────────────────────────────────────────────
 
 function ComponentNode({ data }: { data: any }) {
   const c = LAYER_COLOR[data.layer] || '#94a3b8'
   const Icon = LAYER_ICON[data.layer] ?? Box
   const isSelected: boolean = data.selected ?? false
-  const expanded: boolean = data.expanded ?? false
+  const isDimmed: boolean = data.dimmed ?? false
+  const expandedFiles: boolean = data.expanded ?? false
+  const hasChildren: boolean = data.hasChildren ?? false
+  const childCount: number = data.childCount ?? 0
   const loading: boolean = data.loading ?? false
 
   return (
@@ -197,7 +254,8 @@ function ComponentNode({ data }: { data: any }) {
         boxShadow: isSelected
           ? `0 0 0 1px ${c}55, 0 0 32px ${c}44, 0 8px 40px rgba(0,0,0,0.6)`
           : '0 4px 24px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)',
-        transition: 'box-shadow 0.25s ease, border-color 0.25s ease',
+        opacity: isDimmed ? 0.25 : 1,
+        transition: 'opacity 0.2s ease, box-shadow 0.25s ease, border-color 0.25s ease',
         animation: 'node-appear 0.22s ease both',
       }}
     >
@@ -244,25 +302,44 @@ function ComponentNode({ data }: { data: any }) {
             color: isSelected ? '#f0f7ff' : 'var(--text-primary)', letterSpacing: '-0.01em',
           }}>{data.label}</span>
 
-          {/* Expand files as graph nodes */}
-          <button
-            onMouseDown={e => e.stopPropagation()}
-            onClick={e => { e.stopPropagation(); data.onToggle?.() }}
-            style={{
-              background: expanded ? c + '22' : 'none',
-              border: `1px solid ${expanded ? c + '55' : 'rgba(255,255,255,0.08)'}`,
-              borderRadius: 6, cursor: 'pointer',
-              color: expanded ? c : 'var(--text-muted)',
-              padding: '2px 5px', display: 'flex', alignItems: 'center', gap: 3,
-              transition: 'all 0.15s', fontSize: 8.5, fontWeight: 600,
-            }}
-            title={expanded ? 'Collapse file nodes' : 'Expand file nodes in graph'}
-          >
-            {loading
-              ? <span className="spinner" style={{ width: 10, height: 10, borderWidth: 1.5 }} />
-              : <><FileCode size={9} /><ChevronDown size={9} style={{ transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} /></>
-            }
-          </button>
+          {/* Drill-in button — only for nodes with children */}
+          {hasChildren ? (
+            <button
+              onMouseDown={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); data.onDrillIn?.() }}
+              style={{
+                background: `${c}18`,
+                border: `1px solid ${c}44`,
+                borderRadius: 6, cursor: 'pointer', color: c,
+                padding: '2px 6px', display: 'flex', alignItems: 'center', gap: 3,
+                transition: 'all 0.15s', fontSize: 8.5, fontWeight: 700,
+              }}
+              title={`Drill in — view ${childCount} child${childCount !== 1 ? 'ren' : ''}`}
+            >
+              <ChevronRight size={9} />
+              {childCount > 0 && <span>{childCount}</span>}
+            </button>
+          ) : (
+            /* File expand — only on leaf nodes (no hierarchy children) */
+            <button
+              onMouseDown={e => e.stopPropagation()}
+              onClick={e => { e.stopPropagation(); data.onToggle?.() }}
+              style={{
+                background: expandedFiles ? c + '22' : 'none',
+                border: `1px solid ${expandedFiles ? c + '55' : 'rgba(255,255,255,0.08)'}`,
+                borderRadius: 6, cursor: 'pointer',
+                color: expandedFiles ? c : 'var(--text-muted)',
+                padding: '2px 5px', display: 'flex', alignItems: 'center', gap: 3,
+                transition: 'all 0.15s', fontSize: 8.5, fontWeight: 600,
+              }}
+              title={expandedFiles ? 'Collapse file nodes' : 'Expand file nodes in graph'}
+            >
+              {loading
+                ? <span className="spinner" style={{ width: 10, height: 10, borderWidth: 1.5 }} />
+                : <><FileCode size={9} /><ChevronDown size={9} style={{ transform: expandedFiles ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} /></>
+              }
+            </button>
+          )}
         </div>
 
         {/* Layer + level + confidence pills */}
@@ -273,14 +350,12 @@ function ComponentNode({ data }: { data: any }) {
             letterSpacing: '0.04em', textTransform: 'capitalize',
             background: c + '18', color: c, border: `1px solid ${c}33`,
           }}>{data.layer}</span>
-          {data.level && data.level !== 4 && (
-            <span style={{
-              display: 'inline-flex', alignItems: 'center',
-              padding: '1px 7px', borderRadius: 99, fontSize: 9, fontWeight: 700,
-              background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.3)',
-              letterSpacing: '0.02em',
-            }}>L{data.level} {LEVEL_LABELS[data.level as NodeLevel] ?? ''}</span>
-          )}
+          <span style={{
+            display: 'inline-flex', alignItems: 'center',
+            padding: '1px 7px', borderRadius: 99, fontSize: 9, fontWeight: 700,
+            background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.3)',
+            letterSpacing: '0.02em',
+          }}>L{data.level ?? 4} {LEVEL_LABELS[(data.level ?? 4) as NodeLevel] ?? ''}</span>
           {data.public_api?.length > 0 && (
             <span style={{
               display: 'inline-flex', alignItems: 'center',
@@ -890,8 +965,9 @@ const edgeTypes = { floating: FlowEdge }
 function layoutWithDagre(nodes: Node[], edges: Edge[]): Node[] {
   const g = new dagre.graphlib.Graph()
   g.setDefaultEdgeLabel(() => ({}))
-  g.setGraph({ rankdir: 'TB', nodesep: 80, ranksep: 120, marginx: 50, marginy: 50 })
-  nodes.forEach(n => g.setNode(n.id, { width: NODE_W + 20, height: NODE_H + 20 }))
+  // Tighter spacing: fewer nodes visible at any time due to hierarchical fold
+  g.setGraph({ rankdir: 'TB', nodesep: 60, ranksep: 100, marginx: 60, marginy: 60 })
+  nodes.forEach(n => g.setNode(n.id, { width: NODE_W + 16, height: NODE_H + 16 }))
   edges.forEach(e => { try { g.setEdge(e.source, e.target) } catch { /* ignore duplicate */ } })
   dagre.layout(g)
   return nodes.map(n => {
@@ -921,8 +997,11 @@ export default function ArchitecturePage() {
   const [loadingFiles, setLoadingFiles] = useState<Set<string>>(new Set())
   const [filePanel, setFilePanel] = useState<{ file: FileMapping; nodeId: string } | null>(null)
   const [symbolPanel, setSymbolPanel] = useState<{ symbol: string; filePath: string } | null>(null)
-  // Multi-level graph state
-  const [levelFilter, setLevelFilter] = useState<NodeLevel | null>(null)
+  // C4 navigator — breadcrumb drill-down stack
+  const [navStack, setNavStack] = useState<Array<{ id: string; name: string; layer: string }>>([])
+  const rfRef = React.useRef<any>(null)
+  // Saved positions before focus-radial repositioning so they can be restored on deselect
+  const focusSavedPos = React.useRef<Record<string, { x: number; y: number }>>({})
   const [migrating, setMigrating] = useState(false)
   const [showEdgeLegend, setShowEdgeLegend] = useState(false)
   const [showResetDialog, setShowResetDialog] = useState(false)
@@ -930,16 +1009,61 @@ export default function ArchitecturePage() {
 
   const graphKey = projectPath ? `archmap-graph::${btoa(projectPath)}` : null
 
+  // Map parent_id → [child_id] for all components
+  const childrenMap = useMemo(() => {
+    const map: Record<string, string[]> = {}
+    for (const c of components) {
+      if (c.parent_id) {
+        map[c.parent_id] = map[c.parent_id] ?? []
+        map[c.parent_id].push(c.id)
+      }
+    }
+    return map
+  }, [components])
+
+  // IDs of the selected node + its direct neighbors (for dimming unrelated nodes)
+  const neighborIds = useMemo(() => {
+    if (!selected) return null
+    const ids = new Set<string>()
+    ids.add(selected.id)
+    for (const d of dependencies) {
+      if (d.from_component === selected.id) ids.add(d.to_component)
+      if (d.to_component === selected.id) ids.add(d.from_component)
+    }
+    return ids
+  }, [selected, dependencies])
+
+  // Build the ReactFlow graph for the given navigation scope.
+  // Takes explicit data params (not state) to avoid stale-closure issues.
+  const buildScopedGraph = useCallback((
+    allComponents: Component[],
+    allDeps: Dependency[],
+    cMap: Record<string, string[]>,
+    scope: Array<{ id: string }>,
+    savedPositions: Record<string, { x: number; y: number }> = {},
+  ) => {
+    const scopeId = scope[scope.length - 1]?.id ?? null
+    let visibleComps: Component[]
+    if (scopeId === null) {
+      // Root: L1 + L2. Fallback to all if graph has no hierarchy.
+      visibleComps = allComponents.filter(c => (c.level ?? 4) <= 2)
+      if (visibleComps.length === 0) visibleComps = allComponents
+    } else {
+      const childIds = new Set(cMap[scopeId] ?? [])
+      visibleComps = allComponents.filter(c => childIds.has(c.id))
+    }
+    const visibleSet = new Set(visibleComps.map(c => c.id))
+    const visibleDeps = allDeps.filter(d => visibleSet.has(d.from_component) && visibleSet.has(d.to_component))
+    const laid = layoutWithDagre(buildNodes(visibleComps, cMap), buildEdges(visibleDeps))
+    const withPositions = laid.map(n => savedPositions[n.id] ? { ...n, position: savedPositions[n.id] } : n)
+    setNodes(withPositions)
+    setEdges(buildEdges(visibleDeps))
+  }, [])
+
   const load = useCallback(async () => {
     if (!projectPath) return
-
-    // Read saved state SYNCHRONOUSLY before the first await — concurrent effects
-    // (e.g. the expansion persistence useEffect) can overwrite localStorage while we await,
-    // so capture the values now into local variables that won't be affected.
     const saved = graphKey ? JSON.parse(localStorage.getItem(graphKey) ?? '{}') : {}
     const savedPositions: Record<string, { x: number; y: number }> = saved.positions ?? {}
-    const savedExpandedComponents: string[] = saved.expandedComponents ?? []
-    const savedExpandedFiles: string[] = saved.expandedFiles ?? []
 
     setLoading(true)
     setFilePanel(null)
@@ -948,146 +1072,20 @@ export default function ArchitecturePage() {
       const arch = await getArchitecture(projectPath)
       setComponents(arch.components)
       setDependencies(arch.dependencies)
-      const rawEdges = buildEdges(arch.dependencies)
-      const rawNodes = buildNodes(arch.components)
-      const laid = layoutWithDagre(rawNodes, rawEdges)
-
-      // Restore component node positions
-      const compNodes = laid.map(n =>
-        savedPositions[n.id] ? { ...n, position: savedPositions[n.id] } : n
-      )
-
-      // Re-expand previously expanded components (fetch files from server)
-      const allFileNodes: Node[] = []
-      const allFileEdges: Edge[] = []
-      const validExpandedComponents: string[] = []
-      const validExpandedFiles = new Set<string>()
-
-      for (const compId of savedExpandedComponents) {
-        const parentNode = compNodes.find(n => n.id === compId)
-        if (!parentNode) continue
-        try {
-          const files = await listComponentFiles(projectPath, compId)
-          const parentColor = LAYER_COLOR[parentNode.data.layer as string] ?? '#94a3b8'
-          const cols = 3
-          const fw = 160, fh = 100, gap = 12
-          const px = parentNode.position.x
-          const py = parentNode.position.y
-          const totalW = Math.min(files.length, cols) * (fw + gap) - gap
-          const startX = px + (NODE_W - totalW) / 2
-
-          const fileNodes: Node[] = files.map((f, i) => {
-            const fileNodeId = `file::${compId}::${i}`
-            const defaultPos = {
-              x: startX + (i % cols) * (fw + gap),
-              y: py + NODE_H + 60 + Math.floor(i / cols) * (fh + gap),
-            }
-            return {
-              id: fileNodeId,
-              type: 'file',
-              position: savedPositions[fileNodeId] ?? defaultPos,
-              data: { file: f, componentId: compId, parentColor },
-              draggable: true,
-              selectable: true,
-            }
-          })
-
-          const fileEdges: Edge[] = files.map((_, i) => ({
-            id: `fileedge::${compId}::${i}`,
-            source: compId,
-            target: `file::${compId}::${i}`,
-            type: 'straight',
-            style: { stroke: 'rgba(255,255,255,0.1)', strokeWidth: 1, strokeDasharray: '3 3' },
-            selectable: false,
-            focusable: false,
-          }))
-
-          allFileNodes.push(...fileNodes)
-          allFileEdges.push(...fileEdges)
-          validExpandedComponents.push(compId)
-
-          // Re-expand previously expanded file nodes (symbols are built from metadata, no API needed)
-          for (const fileNodeId of savedExpandedFiles) {
-            if (!fileNodeId.startsWith(`file::${compId}::`)) continue
-            const fileNode = fileNodes.find(n => n.id === fileNodeId)
-            if (!fileNode) continue
-            const file = fileNode.data?.file as FileMapping | undefined
-            const rawSymbols: string[] = (file?.symbols ?? []).map(
-              (s: any) => s.display_name ?? s.name ?? ''
-            ).filter(Boolean)
-            const symbols: string[] = rawSymbols.length > 0 ? rawSymbols : (file?.metadata?.functions ?? [])
-            if (symbols.length === 0) continue
-            const { x: fpx, y: fpy } = fileNode.position
-            const fParentColor = (fileNode.data?.parentColor as string) ?? '#64748b'
-            const fFilePath = file?.file_path ?? ''
-            const cols2 = 2, sw = 136, sh = 46, sgap = 6
-            const totalW2 = Math.min(symbols.length, cols2) * (sw + sgap) - sgap
-            const startX2 = fpx + (158 - totalW2) / 2
-
-            const symNodes: Node[] = symbols.map((sym, i) => {
-              const symNodeId = `sym::${fileNodeId}::${i}`
-              return {
-                id: symNodeId,
-                type: 'symbol',
-                position: savedPositions[symNodeId] ?? {
-                  x: startX2 + (i % cols2) * (sw + sgap),
-                  y: fpy + 108 + Math.floor(i / cols2) * (sh + sgap),
-                },
-                data: { symbol: sym, filePath: fFilePath, parentColor: fParentColor, fileNodeId },
-                draggable: true, selectable: true,
-              }
-            })
-
-            const symEdges: Edge[] = symbols.map((_, i) => ({
-              id: `symedge::${fileNodeId}::${i}`,
-              source: fileNodeId,
-              target: `sym::${fileNodeId}::${i}`,
-              type: 'straight',
-              style: { stroke: `${fParentColor}28`, strokeWidth: 0.75, strokeDasharray: '2 3' },
-              selectable: false, focusable: false,
-            }))
-
-            allFileNodes.push(...symNodes)
-            allFileEdges.push(...symEdges)
-            validExpandedFiles.add(fileNodeId)
-          }
-        } catch { /* skip this component's expansion if fetch fails */ }
+      const cMap: Record<string, string[]> = {}
+      for (const c of arch.components) {
+        if (c.parent_id) { cMap[c.parent_id] = cMap[c.parent_id] ?? []; cMap[c.parent_id].push(c.id) }
       }
-
-      setNodes([...compNodes, ...allFileNodes])
-      setEdges([...rawEdges, ...allFileEdges])
-      setExpandedComponents(new Set(validExpandedComponents))
-      setExpandedFiles(validExpandedFiles)
+      setNavStack([]) // always reset to root on full reload
+      buildScopedGraph(arch.components, arch.dependencies, cMap, [], savedPositions)
+      setExpandedComponents(new Set())
+      setExpandedFiles(new Set())
+      focusSavedPos.current = {}
     } catch (e: any) { toast('error', e.message) }
     finally { setLoading(false) }
-  }, [projectPath, graphKey])
+  }, [projectPath, graphKey, buildScopedGraph])
 
   useEffect(() => { load() }, [load])
-
-  // Rebuild graph when level filter changes (without refetching from server)
-  const prevLevelFilter = React.useRef<NodeLevel | null | undefined>(undefined)
-  useEffect(() => {
-    // Skip initial mount (load() handles the first render)
-    if (prevLevelFilter.current === undefined) { prevLevelFilter.current = levelFilter; return }
-    if (prevLevelFilter.current === levelFilter) return
-    prevLevelFilter.current = levelFilter
-    if (components.length === 0) return
-    const filtered = levelFilter !== null
-      ? components.filter(c => (c.level ?? 4) === levelFilter)
-      : components
-    const filteredIds = new Set(filtered.map(c => c.id))
-    const filteredDeps = dependencies.filter(
-      d => filteredIds.has(d.from_component) && filteredIds.has(d.to_component)
-    )
-    const rawNodes = buildNodes(filtered)
-    const rawEdges = buildEdges(filteredDeps)
-    const laid = layoutWithDagre(rawNodes, rawEdges)
-    // Drop file/symbol expansions when filter changes
-    setNodes(laid)
-    setEdges(rawEdges)
-    setExpandedComponents(new Set())
-    setExpandedFiles(new Set())
-  }, [levelFilter, components, dependencies])
 
   const toggleNode = useCallback(async (nodeId: string) => {
     // Collapse: remove file nodes + their symbol children
@@ -1160,6 +1158,39 @@ export default function ArchitecturePage() {
     } catch { /* silent */ }
     finally { setLoadingComponents(prev => { const s = new Set(prev); s.delete(nodeId); return s }) }
   }, [projectPath, expandedComponents])
+
+  // ── C4 Navigator: drill-down and breadcrumb navigation ────────────────────────
+
+  const drillInto = useCallback((comp: Component) => {
+    if ((childrenMap[comp.id] ?? []).length === 0) return
+    setNavStack(prev => [...prev, { id: comp.id, name: comp.name, layer: comp.layer }])
+    setSelected(null)
+    setFilePanel(null)
+    setSymbolPanel(null)
+    focusSavedPos.current = {}
+  }, [childrenMap])
+
+  // Navigate to a specific breadcrumb index (−1 = root)
+  const navigateTo = useCallback((index: number) => {
+    setNavStack(prev => index < 0 ? [] : prev.slice(0, index + 1))
+    setSelected(null)
+    setFilePanel(null)
+    focusSavedPos.current = {}
+  }, [])
+
+  // Rebuild graph whenever the navigation stack changes
+  const prevNavKey = React.useRef<string>('__init__')
+  useEffect(() => {
+    const key = navStack.map(n => n.id).join('/')
+    if (prevNavKey.current === '__init__') { prevNavKey.current = key; return } // skip initial mount
+    if (prevNavKey.current === key) return
+    prevNavKey.current = key
+    if (components.length === 0) return
+    buildScopedGraph(components, dependencies, childrenMap, navStack)
+    setExpandedComponents(new Set())
+    setExpandedFiles(new Set())
+    focusSavedPos.current = {}
+  }, [navStack, components, dependencies, childrenMap, buildScopedGraph])
 
   // Persist expansion state whenever it changes
   useEffect(() => {
@@ -1353,16 +1384,67 @@ export default function ArchitecturePage() {
       setSelected(components.find(c => c.id === node.id) ?? null)
       setFilePanel(null)
       setSymbolPanel(null)
+
+      // ── Radial focus: reposition direct neighbors around the focal node ────────
+      // Only rearrange component nodes (not file/symbol nodes)
+      setNodes(prev => {
+        const compEdges = edges.filter(e =>
+          !e.id.startsWith('fileedge::') && !e.id.startsWith('symedge::') && !e.id.startsWith('hieredge::')
+        )
+        const nbrIds = Array.from(new Set([
+          ...compEdges.filter(e => e.source === node.id).map(e => e.target),
+          ...compEdges.filter(e => e.target === node.id).map(e => e.source),
+        ])).filter(id => prev.some(n => n.id === id && n.type === 'component'))
+
+        if (nbrIds.length === 0) {
+          setTimeout(() => rfRef.current?.fitView({ nodes: [{ id: node.id }], duration: 500, padding: 1.8 }), 20)
+          return prev
+        }
+
+        // Save original positions for restoration
+        const saved: Record<string, { x: number; y: number }> = {}
+        for (const n of prev) {
+          if (nbrIds.includes(n.id)) saved[n.id] = { ...n.position }
+        }
+        focusSavedPos.current = saved
+
+        // Place neighbors in a circle around the focal node
+        const focalNode = prev.find(n => n.id === node.id)!
+        const fx = focalNode.position.x + (NODE_W / 2)
+        const fy = focalNode.position.y + (NODE_H / 2)
+        const radius = Math.max(260, nbrIds.length * 55)
+        const angleStep = (2 * Math.PI) / nbrIds.length
+
+        const updated = prev.map(n => {
+          const idx = nbrIds.indexOf(n.id)
+          if (idx < 0) return n
+          const angle = -Math.PI / 2 + idx * angleStep
+          return {
+            ...n,
+            position: {
+              x: fx + Math.cos(angle) * radius - NODE_W / 2,
+              y: fy + Math.sin(angle) * radius - NODE_H / 2,
+            },
+          }
+        })
+
+        // Fit to focal + neighbors after React re-renders positions
+        const fitIds = [{ id: node.id }, ...nbrIds.map(id => ({ id }))]
+        setTimeout(() => rfRef.current?.fitView({ nodes: fitIds, duration: 520, padding: 0.6 }), 30)
+
+        return updated
+      })
     } else if (node.type === 'file') {
       setSelected(null)
       setSymbolPanel(null)
       setFilePanel({ file: node.data.file as FileMapping, nodeId: node.id })
+      rfRef.current?.fitView({ nodes: [{ id: node.id }], duration: 400, padding: 2.0 })
     } else if (node.type === 'symbol') {
       setSelected(null)
       setFilePanel(null)
       setSymbolPanel({ symbol: node.data.symbol as string, filePath: node.data.filePath as string })
     }
-  }, [components])
+  }, [components, edges])
 
   const handleDeleteComp = async (id: string) => {
     if (!projectPath) return
@@ -1428,15 +1510,23 @@ export default function ArchitecturePage() {
         )}
 
         <ReactFlow
+          onInit={inst => { rfRef.current = inst }}
           nodes={nodes.map(n => {
             if (n.type === 'component') return {
               ...n,
               data: {
                 ...n.data,
                 selected: n.id === selected?.id,
+                dimmed: neighborIds !== null && !neighborIds.has(n.id),
                 expanded: expandedComponents.has(n.id),
                 loading: loadingComponents.has(n.id),
+                hasChildren: (childrenMap[n.id] ?? []).length > 0,
+                childCount: (childrenMap[n.id] ?? []).length,
                 onToggle: () => toggleNode(n.id),
+                onDrillIn: () => {
+                  const comp = components.find(c => c.id === n.id)
+                  if (comp) drillInto(comp)
+                },
               },
             }
             if (n.type === 'file') return {
@@ -1468,6 +1558,20 @@ export default function ArchitecturePage() {
               ? { ...e, data: { ...e.data, isCycle: true }, markerEnd: { type: MarkerType.ArrowClosed, width: 10, height: 10, color: '#f87171' }, labelStyle: { fill: '#f87171', fontSize: 9.5 } }
               : e)
           })() : edges}
+          onPaneClick={() => {
+            setSelected(null); setFilePanel(null); setSymbolPanel(null)
+            // Restore neighbor positions that were rearranged during focus
+            if (Object.keys(focusSavedPos.current).length > 0) {
+              const restore = focusSavedPos.current
+              focusSavedPos.current = {}
+              setNodes(prev => prev.map(n => restore[n.id] ? { ...n, position: restore[n.id] } : n))
+            }
+          }}
+          onNodeDoubleClick={(_e, node) => {
+            if (node.type !== 'component') return
+            const comp = components.find(c => c.id === node.id)
+            if (comp) drillInto(comp)
+          }}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
@@ -1517,6 +1621,13 @@ export default function ArchitecturePage() {
             nodeStrokeWidth={0}
           />
 
+          {/* C4 Breadcrumb navigation */}
+          <Panel position="top-center">
+            <div style={{ marginTop: 8 }}>
+              <BreadcrumbNav navStack={navStack} onNavigate={navigateTo} />
+            </div>
+          </Panel>
+
           {/* Toolbar */}
           <Panel position="top-left">
             <div style={{
@@ -1539,23 +1650,16 @@ export default function ArchitecturePage() {
                 {inferring ? <span className="spinner" /> : <><GitBranch size={12} /> Infer Deps</>}
               </button>
               <div style={{ width: 1, background: 'rgba(255,255,255,0.08)', margin: '0 2px' }} />
-              {/* Level filter tabs */}
-              {([null, 1, 2, 3, 4, 5] as (NodeLevel | null)[]).map(lv => (
+              {navStack.length > 0 && (
                 <button
-                  key={lv ?? 'all'}
                   className="btn btn-ghost btn-sm"
-                  onClick={() => setLevelFilter(lv)}
-                  style={{
-                    color: levelFilter === lv ? '#a78bfa' : undefined,
-                    background: levelFilter === lv ? 'rgba(139,92,246,0.12)' : undefined,
-                    border: levelFilter === lv ? '1px solid rgba(139,92,246,0.3)' : undefined,
-                    fontSize: 10, padding: '3px 7px',
-                  }}
-                  title={lv === null ? 'Show all levels' : `Show only L${lv} (${LEVEL_LABELS[lv]})`}
+                  onClick={() => navigateTo(-1)}
+                  title="Back to domain overview"
+                  style={{ fontSize: 10, padding: '3px 7px', color: '#a78bfa' }}
                 >
-                  {lv === null ? 'All' : `L${lv}`}
+                  <Layers size={11} /> Root
                 </button>
-              ))}
+              )}
               <div style={{ width: 1, background: 'rgba(255,255,255,0.08)', margin: '0 2px' }} />
               <button
                 className="btn btn-ghost btn-sm"
@@ -2435,7 +2539,8 @@ function AddComponentModal({ projectPath, onClose, onAdded, toast }: any) {
 
 // ── Data helpers ───────────────────────────────────────────────────────────────
 
-function buildNodes(components: Component[]): Node[] {
+
+function buildNodes(components: Component[], childrenMap: Record<string, string[]>): Node[] {
   return components.map(c => ({
     id: c.id, type: 'component',
     data: {
@@ -2447,6 +2552,7 @@ function buildNodes(components: Component[]): Node[] {
       public_api: c.public_api ?? [],
       stability: c.stability ?? 'stable',
       protocol: c.protocol ?? '',
+      hasChildren: (childrenMap[c.id] ?? []).length > 0,
     },
     position: { x: 0, y: 0 },
   }))
