@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from archmap.models import Dependency, _short_id
-from archmap.store import load_arch, load_mappings, mutate_arch
+from archmap.repo import load_arch, load_mappings, mutate_arch
 
 
 # ─── Language detectors ────────────────────────────────────────────────────────
@@ -179,23 +179,8 @@ def infer_dependencies(
         for fp, rec in mappings.get("files", {}).items()
     }
 
-    arch = load_arch(project_path)
-    existing_deps = arch.get("dependencies", [])
-
-    # Build set of already-known (from, to) pairs
-    existing_pairs: set[tuple[str, str]] = {
-        (d["from_component"], d["to_component"])
-        for d in existing_deps
-        if d.get("confidence", "confirmed") == "confirmed"
-    }
-    existing_auto: set[tuple[str, str]] = {
-        (d["from_component"], d["to_component"])
-        for d in existing_deps
-        if d.get("confidence") == "auto"
-    }
-
-    # Scan each mapped file
-    # inferred_pairs: {(from_comp, to_comp) -> set of source files (for labelling)}
+    # Scan each mapped file for imports.
+    # inferred: {(from_comp, to_comp) -> set of source files} — already deduplicated by pair.
     inferred: dict[tuple[str, str], set[str]] = {}
     unmapped: set[str] = set()
 
@@ -225,34 +210,58 @@ def infer_dependencies(
             pair = (from_comp, to_comp)
             inferred.setdefault(pair, set()).add(rel_path)
 
-    # Write new deps
+    # Write new deps inside mutate_arch to get the latest data state (prevents
+    # duplicates when infer runs concurrently or is called multiple times).
     added_deps: list[dict] = []
     skipped = 0
 
     def _mutate(data: dict) -> None:
         deps = data.setdefault("dependencies", [])
-        # Index current auto deps by pair for removal if overwrite_auto
+
+        # First: deduplicate any existing duplicate pairs in the stored data
+        # (cleans up duplicates that may have accumulated from earlier bugs).
+        seen_pairs: set[tuple[str, str]] = set()
+        deduped: list[dict] = []
+        for d in deps:
+            pair = (d["from_component"], d["to_component"])
+            if pair not in seen_pairs:
+                seen_pairs.add(pair)
+                deduped.append(d)
+        if len(deduped) < len(deps):
+            deps.clear()
+            deps.extend(deduped)
+
+        # Build fresh dedup sets from the now-clean current data.
+        current_confirmed: set[tuple[str, str]] = {
+            (d["from_component"], d["to_component"])
+            for d in deps
+            if d.get("confidence", "confirmed") == "confirmed"
+        }
+        current_auto: set[tuple[str, str]] = {
+            (d["from_component"], d["to_component"])
+            for d in deps
+            if d.get("confidence") == "auto"
+        }
         auto_by_pair: dict[tuple[str, str], dict] = {
             (d["from_component"], d["to_component"]): d
             for d in deps
             if d.get("confidence") == "auto"
         }
 
-        for (from_comp, to_comp), source_files in inferred.items():
+        for (from_comp, to_comp), _source_files in inferred.items():
             pair = (from_comp, to_comp)
 
-            if pair in existing_pairs:
-                # Confirmed dep already covers this — skip regardless
+            if pair in current_confirmed:
                 nonlocal skipped
                 skipped += 1
                 continue
 
-            if pair in existing_auto:
+            if pair in current_auto:
                 if overwrite_auto:
-                    # Remove old auto dep and re-add fresh
                     old = auto_by_pair.get(pair)
                     if old:
                         deps.remove(old)
+                        current_auto.discard(pair)
                 else:
                     skipped += 1
                     continue
@@ -266,6 +275,7 @@ def infer_dependencies(
             )
             dep_dict = dep.to_dict()
             deps.append(dep_dict)
+            current_auto.add(pair)  # prevent intra-batch dupes
             added_deps.append(dep_dict)
 
     mutate_arch(project_path, _mutate)

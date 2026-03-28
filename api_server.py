@@ -25,13 +25,22 @@ from typing import Optional, List
 import uvicorn
 
 import archmap.architecture as arch_mod
+import archmap.audit as audit_mod
+import archmap.cognition as cognition_mod
+import archmap.context as ctx_mod
+import archmap.contracts as contracts_mod
+import archmap.decisions as decisions_mod
+import archmap.impact as impact_mod
 import archmap.inference as infer_mod
 import archmap.intelligence as intel_mod
 import archmap.mapping as map_mod
 import archmap.metrics as metrics_mod
+import archmap.migration as migration_mod
 import archmap.planning as plan_mod
 import archmap.project as proj_mod
+import archmap.rules as rules_mod
 import archmap.scanner as scan_mod
+import archmap.session as session_mod
 import archmap.symbols as symbols_mod
 from archmap.models import ArchMapError, NotFoundError
 from archmap import __version__
@@ -82,6 +91,15 @@ class AddComponentReq(BaseModel):
     color: str = "#6366f1"
     confidence: str = "confirmed"
     metadata: dict = {}
+    # Multi-level hierarchy
+    level: int = 4
+    parent_id: str = ""
+    protocol: str = ""
+    port: Optional[int] = None
+    deploy_unit: bool = False
+    public_api: List[str] = []
+    data_owned: List[str] = []
+    stability: str = "stable"
 
 class UpdateComponentReq(BaseModel):
     name: Optional[str] = None
@@ -90,6 +108,78 @@ class UpdateComponentReq(BaseModel):
     tags: Optional[List[str]] = None
     color: Optional[str] = None
     confidence: Optional[str] = None
+    owner: Optional[str] = None
+    tier: Optional[str] = None
+    onboarding_notes: Optional[str] = None
+    runbook_url: Optional[str] = None
+    slack_channel: Optional[str] = None
+    # Multi-level hierarchy
+    level: Optional[int] = None
+    parent_id: Optional[str] = None
+    protocol: Optional[str] = None
+    port: Optional[int] = None
+    deploy_unit: Optional[bool] = None
+    public_api: Optional[List[str]] = None
+    data_owned: Optional[List[str]] = None
+    stability: Optional[str] = None
+
+class AnnotateDependencyReq(BaseModel):
+    project_path: str
+    dependency_id: str
+    edge_type: Optional[str] = None
+    edge_level: Optional[str] = None
+    crosses_boundary: Optional[bool] = None
+    async_flag: Optional[bool] = None
+    direction: Optional[str] = None
+    interface_points: Optional[List[str]] = None
+    payload_types: Optional[List[str]] = None
+    stability: Optional[str] = None
+    label: Optional[str] = None
+
+class DeclareContractReq(BaseModel):
+    project_path: str
+    node_id: str
+    node_level: int = 4
+    commands: List[dict] = []
+    queries: List[dict] = []
+    events_emitted: List[dict] = []
+    events_consumed: List[dict] = []
+    data_owned: List[dict] = []
+    data_read: List[dict] = []
+    api_spec_url: str = ""
+    sla: str = ""
+
+class PromoteContractReq(BaseModel):
+    project_path: str
+    component_id: str
+    symbol_names: List[str]
+
+class RemapFilesReq(BaseModel):
+    project_path: str
+    file_paths: List[str]
+    target_component_id: str
+
+class MigrateReq(BaseModel):
+    project_path: str
+
+class AddDecisionReq(BaseModel):
+    project_path: str
+    component_id: str
+    title: str
+    context: str = ""
+    decision: str = ""
+    consequences: str = ""
+    alternatives: str = ""
+    status: str = "proposed"
+
+class UpdateDecisionReq(BaseModel):
+    title: Optional[str] = None
+    status: Optional[str] = None
+    context: Optional[str] = None
+    decision: Optional[str] = None
+    consequences: Optional[str] = None
+    alternatives: Optional[str] = None
+    superseded_by: Optional[str] = None
 
 class AddDependencyReq(BaseModel):
     project_path: str
@@ -131,6 +221,22 @@ class ScanReq(BaseModel):
     project_path: str
     overwrite_auto: bool = False
     depth: int = 2
+
+class BulkMapReq(BaseModel):
+    project_path: str
+    mappings: List[dict]
+
+class PostEditSyncReq(BaseModel):
+    project_path: str
+    file_paths: List[str]
+    reinfer_dependencies: bool = False
+
+class AddRuleReq(BaseModel):
+    project_path: str
+    rule_type: str
+    from_layer: str = ""
+    to_layer: str = ""
+    message: str = ""
 
 # Legacy generic tool call (kept for MCP UI compat)
 class ToolCall(BaseModel):
@@ -192,13 +298,30 @@ async def project_status(project_path: str):
     except ArchMapError as e:
         raise HTTPException(400, str(e))
 
+@app.post("/api/project/reset")
+async def reset_graph(project_path: str):
+    """Wipe architecture + mappings back to empty. meta.json and plan.json are preserved."""
+    try:
+        from archmap.store import reset_graph as _reset
+        return await _run_sync(_reset, project_path)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
 
 # ─── Architecture ─────────────────────────────────────────────────────────────
 
 @app.get("/api/architecture")
 async def get_architecture(project_path: str):
     try:
-        return await _run_sync(arch_mod.get_architecture, project_path)
+        result = await _run_sync(arch_mod.get_architecture, project_path)
+        # Auto-start the file watcher for this project on first load.
+        # Runs in background — failure is non-fatal (watchdog may not be installed).
+        try:
+            from archmap.watcher import start_watcher as _start_w
+            await _run_sync(_start_w, project_path, _on_file_synced)
+        except Exception:
+            pass
+        return result
     except ArchMapError as e:
         raise HTTPException(400, str(e))
 
@@ -215,7 +338,11 @@ async def add_component(req: AddComponentReq):
         return await _run_sync(
             arch_mod.add_component,
             req.project_path, req.name, req.description,
-            req.layer, req.tags, req.color, req.confidence, req.metadata,
+            req.layer, req.tags, req.color, req.confidence,
+            metadata=req.metadata or {},
+            level=req.level, parent_id=req.parent_id,
+            protocol=req.protocol, port=req.port, deploy_unit=req.deploy_unit,
+            public_api=req.public_api, data_owned=req.data_owned, stability=req.stability,
         )
     except ArchMapError as e:
         raise HTTPException(400, str(e))
@@ -448,61 +575,12 @@ async def get_component_metrics(component_id: str, project_path: str):
 
 @app.get("/api/impact/{component_id}")
 async def get_component_impact(component_id: str, project_path: str):
-    """
-    BFS impact analysis: given a component, return:
-    - upstream: components that depend ON this component (would break if it changes)
-    - downstream: components this component depends ON
-    - cycles: any dependency cycle involving this component
-    - is_leaf: no outgoing deps
-    - is_root: no incoming deps
-    """
     try:
-        arch = await _run_sync(arch_mod.get_architecture, project_path)
+        return await _run_sync(impact_mod.get_component_impact, project_path, component_id)
+    except NotFoundError as e:
+        raise HTTPException(404, str(e))
     except ArchMapError as e:
         raise HTTPException(400, str(e))
-
-    deps = arch.get("dependencies", [])
-    comp_ids = {c["id"] for c in arch.get("components", [])}
-
-    if component_id not in comp_ids:
-        raise HTTPException(404, f"Component {component_id!r} not found")
-
-    # Build adjacency maps
-    outgoing: dict[str, list[str]] = {cid: [] for cid in comp_ids}  # from → [to]
-    incoming: dict[str, list[str]] = {cid: [] for cid in comp_ids}  # to → [from]
-    for d in deps:
-        f, t = d["from_component"], d["to_component"]
-        if f in outgoing:
-            outgoing[f].append(t)
-        if t in incoming:
-            incoming[t].append(f)
-
-    def bfs(adjacency: dict[str, list[str]], start: str) -> set[str]:
-        visited: set[str] = set()
-        queue = [start]
-        while queue:
-            cur = queue.pop(0)
-            for nxt in adjacency.get(cur, []):
-                if nxt not in visited and nxt != start:
-                    visited.add(nxt)
-                    queue.append(nxt)
-        return visited
-
-    downstream = bfs(outgoing, component_id)   # this → ... (what it depends on)
-    upstream   = bfs(incoming, component_id)   # ... → this (what depends on it)
-
-    # Cycle detection: downstream nodes that also have a path back
-    cycles = [cid for cid in downstream if component_id in bfs(outgoing, cid)]
-
-    return {
-        "component_id": component_id,
-        "upstream":    sorted(upstream),     # will break if this component changes
-        "downstream":  sorted(downstream),   # this component depends on these
-        "cycles":      sorted(cycles),
-        "is_leaf":     len(outgoing.get(component_id, [])) == 0,
-        "is_root":     len(incoming.get(component_id, [])) == 0,
-        "impact_score": len(upstream),       # how many components would be affected
-    }
 
 
 # ─── Symbol sync + search + coding context ────────────────────────────────────
@@ -516,7 +594,10 @@ async def sync_file_symbols(req: SyncSymbolsReq):
     """Scan the actual file, auto-extract all top-level symbols, and update the mapping metadata."""
     try:
         extracted = await _run_sync(symbols_mod.extract_all_symbols, req.project_path, req.file_path)
-        metadata: dict = {"functions": extracted["symbols"]}
+        metadata: dict = {
+            "functions": extracted["symbols"],
+            "symbol_details": extracted.get("details", []),
+        }
         if extracted["language"]:
             metadata["language"] = extracted["language"]
         result = await _run_sync(map_mod.update_file_metadata, req.project_path, req.file_path, metadata)
@@ -593,10 +674,10 @@ async def get_coding_context(component_id: str, project_path: str):
 # ─── Architecture intelligence ────────────────────────────────────────────────
 
 @app.get("/api/architecture/describe")
-async def describe_architecture(project_path: str):
-    """Markdown overview of the full architecture — components, files, symbols, deps, entry points."""
+async def describe_architecture(project_path: str, level: Optional[int] = None):
+    """Markdown overview of the architecture. level=1-5 filters to that zoom level."""
     try:
-        text = await _run_sync(intel_mod.describe_architecture, project_path)
+        text = await _run_sync(intel_mod.describe_architecture, project_path, level)
         return {"text": text}
     except ArchMapError as e:
         raise HTTPException(400, str(e))
@@ -642,6 +723,239 @@ async def get_file_symbol(project_path: str, file_path: str, symbol: str):
     return await _run_sync(symbols_mod.extract_symbol, project_path, file_path, symbol)
 
 
+# ─── Bulk mapping ─────────────────────────────────────────────────────────────
+
+@app.post("/api/mappings/bulk")
+async def bulk_map(req: BulkMapReq):
+    """Map multiple files to components in a single request."""
+    try:
+        result = await _run_sync(map_mod.bulk_map, req.project_path, req.mappings)
+        _notify("mappings_changed")
+        return result
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/mappings/cleanup")
+async def cleanup_non_source_mappings(project_path: str):
+    """
+    Remove mapped files that are not source code (docs, config, compiled artefacts).
+    Safe to run at any time — only non-source entries are removed.
+    """
+    try:
+        result = await _run_sync(map_mod.cleanup_non_source_mappings, project_path)
+        _notify("mappings_changed")
+        return result
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── Post-edit sync ───────────────────────────────────────────────────────────
+
+@app.post("/api/sync")
+async def post_edit_sync(req: PostEditSyncReq):
+    """
+    Sync symbol metadata for edited files. Call after editing source files.
+    Returns {synced, unmapped, errors, deps_added}.
+    """
+    def _do_sync():
+        synced, unmapped, errors = [], [], {}
+        for fp in req.file_paths:
+            try:
+                mapping = map_mod.get_file_component(req.project_path, fp)
+                if not mapping:
+                    unmapped.append(fp)
+                    continue
+                extracted = symbols_mod.extract_all_symbols(req.project_path, fp)
+                metadata: dict = {
+                    "functions": extracted["symbols"],
+                    "symbol_details": extracted.get("details", []),
+                }
+                if extracted["language"]:
+                    metadata["language"] = extracted["language"]
+                map_mod.update_file_metadata(req.project_path, fp, metadata)
+                synced.append(fp)
+            except Exception as e:
+                errors[fp] = str(e)
+        deps_added = 0
+        if req.reinfer_dependencies:
+            try:
+                result = infer_mod.infer_dependencies(req.project_path, overwrite_auto=False)
+                deps_added = result.get("added", 0)
+            except Exception as e:
+                errors["__infer__"] = str(e)
+        return {"synced": synced, "unmapped": unmapped, "errors": errors, "deps_added": deps_added}
+
+    try:
+        result = await _run_sync(_do_sync)
+        if result["synced"]:
+            _notify("mappings_changed")
+        if result["deps_added"]:
+            _notify("architecture_changed")
+        return result
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── Cycle detection ──────────────────────────────────────────────────────────
+
+@app.get("/api/cycles")
+async def list_cycles(project_path: str):
+    """Find all dependency cycles in the architecture."""
+    try:
+        arch = await _run_sync(arch_mod.get_architecture, project_path)
+        components = arch.get("components", [])
+        deps = arch.get("dependencies", [])
+        name_map = {c["id"]: c["name"] for c in components}
+        layer_map = {c["id"]: c.get("layer", "") for c in components}
+
+        outgoing: dict = {c["id"]: [] for c in components}
+        for d in deps:
+            if d["from_component"] in outgoing:
+                outgoing[d["from_component"]].append(d["to_component"])
+
+        def bfs(start: str) -> set:
+            visited: set = set()
+            queue = [start]
+            while queue:
+                cur = queue.pop(0)
+                for nxt in outgoing.get(cur, []):
+                    if nxt not in visited and nxt != start:
+                        visited.add(nxt)
+                        queue.append(nxt)
+            return visited
+
+        cycles = []
+        seen_pairs: set = set()
+        for comp in components:
+            cid = comp["id"]
+            downstream = bfs(cid)
+            cycle_partners = [d for d in downstream if cid in bfs(d)]
+            if cycle_partners:
+                for partner in cycle_partners:
+                    pair = tuple(sorted([cid, partner]))
+                    if pair not in seen_pairs:
+                        seen_pairs.add(pair)
+                        cycles.append({
+                            "component_id": cid,
+                            "component_name": name_map.get(cid, cid),
+                            "layer": layer_map.get(cid, ""),
+                            "cycles_with": [{"component_id": p, "component_name": name_map.get(p, p), "layer": layer_map.get(p, "")} for p in cycle_partners],
+                        })
+
+        return {"cycle_count": len(cycles), "cycles": cycles}
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── Architectural rules ──────────────────────────────────────────────────────
+
+@app.get("/api/rules")
+async def list_architecture_rules(project_path: str):
+    """List all configured architectural rules."""
+    try:
+        return await _run_sync(rules_mod.load_rules, project_path)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/rules")
+async def add_architecture_rule(req: AddRuleReq):
+    """Add an architectural constraint rule (no_dep, no_cycles, required_dep)."""
+    try:
+        kwargs: dict = {}
+        if req.from_layer: kwargs["from_layer"] = req.from_layer
+        if req.to_layer:   kwargs["to_layer"]   = req.to_layer
+        if req.message:    kwargs["message"]     = req.message
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _executor, lambda: rules_mod.add_rule(req.project_path, req.rule_type, **kwargs)
+        )
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/rules/{rule_id}")
+async def delete_architecture_rule(rule_id: str, project_path: str):
+    """Remove an architectural rule by ID."""
+    try:
+        deleted = await _run_sync(rules_mod.delete_rule, project_path, rule_id)
+        if not deleted:
+            raise HTTPException(404, f"Rule {rule_id} not found")
+        return {"deleted": True, "rule_id": rule_id}
+    except HTTPException:
+        raise
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/validate")
+async def validate_architecture(project_path: str):
+    """Check all dependencies against configured architectural rules."""
+    try:
+        return await _run_sync(rules_mod.validate_architecture, project_path)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── Audit log ────────────────────────────────────────────────────────────────
+
+@app.get("/api/audit")
+async def get_audit_log(
+    project_path: str,
+    last_n: int = 50,
+    entity_type: str = "",
+    entity_id: str = "",
+    actor: str = "",
+):
+    """Return recent architecture change history, newest first."""
+    try:
+        return await _run_sync(
+            audit_mod.get_audit_log,
+            project_path,
+            last_n=last_n,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            actor=actor,
+        )
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── Agent cognition queries ──────────────────────────────────────────────────
+
+@app.get("/api/who-owns")
+async def who_owns(project_path: str, symbol_name: str):
+    """Find which file and component owns a named symbol."""
+    try:
+        return await _run_sync(cognition_mod.who_owns_symbol, project_path, symbol_name)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/component-interface/{component_id}")
+async def get_component_interface(component_id: str, project_path: str):
+    """Return the public interface of a component: exports, upstreams, imports."""
+    try:
+        result = await _run_sync(cognition_mod.get_component_interface, project_path, component_id)
+        if "error" in result:
+            raise HTTPException(404, result["error"])
+        return result
+    except HTTPException:
+        raise
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/integrity")
+async def check_integrity(project_path: str):
+    """Health check: stale files, missing files, dangling deps, unmapped files, orphan plans."""
+    try:
+        return await _run_sync(cognition_mod.check_integrity, project_path)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
 # ─── Legacy generic tool endpoint (backward-compatible) ───────────────────────
 
 @app.post("/api/tools/{tool}")
@@ -674,6 +988,240 @@ async def call_tool_legacy(tool: str, body: ToolCall):
     except Exception as e:
         raise HTTPException(500, str(e))
 
+
+def _on_file_synced(updated_mapping: dict) -> None:
+    """Called by the file watcher when a mapped file's symbols are refreshed."""
+    _notify("mappings_changed", {"file_path": updated_mapping.get("file_path", "")})
+
+
+@app.post("/api/watcher/start")
+async def start_watcher(project_path: str):
+    """Start the background file watcher for a project. Auto-syncs symbols on file save."""
+    from archmap.watcher import start_watcher as _start
+    started = await _run_sync(_start, project_path, _on_file_synced)
+    return {"watching": started, "project_path": project_path}
+
+
+# ─── Decisions (ADRs) ─────────────────────────────────────────────────────────
+
+@app.get("/api/decisions")
+async def list_decisions(project_path: str, component_id: str = "", status: str = ""):
+    return await _run_sync(decisions_mod.list_decisions, project_path,
+                           component_id, status)
+
+@app.get("/api/decisions/{decision_id}")
+async def get_decision(project_path: str, decision_id: str):
+    try:
+        return await _run_sync(decisions_mod.get_decision, project_path, decision_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+
+@app.post("/api/decisions")
+async def add_decision(req: AddDecisionReq):
+    return await _run_sync(
+        decisions_mod.add_decision,
+        req.project_path, req.component_id, req.title,
+        req.context, req.decision, req.consequences, req.alternatives,
+        None, req.status,
+    )
+
+@app.patch("/api/decisions/{decision_id}")
+async def update_decision(decision_id: str, project_path: str, req: UpdateDecisionReq):
+    try:
+        return await _run_sync(
+            decisions_mod.update_decision, project_path, decision_id,
+            **{k: v for k, v in req.model_dump().items() if v is not None}
+        )
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+
+@app.delete("/api/decisions/{decision_id}")
+async def delete_decision(project_path: str, decision_id: str):
+    return await _run_sync(decisions_mod.delete_decision, project_path, decision_id)
+
+
+# ─── Collaboration sessions ────────────────────────────────────────────────────
+
+@app.get("/api/sessions")
+async def list_active_work(project_path: str):
+    """Return all active work claims — used by the UI collaboration feed."""
+    return await _run_sync(session_mod.list_active_work, project_path)
+
+
+# ─── Multi-level graph — new endpoints ───────────────────────────────────────
+
+@app.get("/api/graph/domain-map")
+async def get_domain_map(project_path: str):
+    """L1/L2 orientation: system + domains + cross-domain edges. Start here."""
+    try:
+        return await _run_sync(ctx_mod.get_domain_map, project_path)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/graph/node/{node_id}")
+async def describe_node(node_id: str, project_path: str, show_files: bool = False):
+    """Drill-down view of any node: metadata, children, contract, edges."""
+    try:
+        return await _run_sync(ctx_mod.describe_node, project_path, node_id, show_files)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/graph/children/{parent_id}")
+async def list_children(parent_id: str, project_path: str):
+    """List direct child nodes of a parent."""
+    try:
+        return await _run_sync(arch_mod.list_children, project_path, parent_id)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/work-context/{node_id}")
+async def get_work_context(node_id: str, project_path: str, task: str = ""):
+    """Scope-isolated context: full detail for owned files + contract-only for consumed nodes."""
+    try:
+        return await _run_sync(ctx_mod.get_work_context, project_path, node_id, task)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/change-surface")
+async def get_change_surface(project_path: str, symbols: str = ""):
+    """Impact analysis at symbol level: which components/edges break if these symbols change."""
+    try:
+        sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
+        return await _run_sync(ctx_mod.get_change_surface, project_path, sym_list)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── Contracts ────────────────────────────────────────────────────────────────
+
+@app.get("/api/contracts")
+async def list_contracts(project_path: str, node_level: Optional[int] = None):
+    """List all declared contracts, optionally filtered by level."""
+    try:
+        return await _run_sync(contracts_mod.list_contracts, project_path, node_level)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/contracts/{node_id}")
+async def get_contract(node_id: str, project_path: str):
+    """Get the declared contract for a node."""
+    try:
+        return await _run_sync(contracts_mod.get_contract, project_path, node_id)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/contracts")
+async def declare_contract(req: DeclareContractReq):
+    """Declare or replace the contract for a node."""
+    try:
+        return await _run_sync(
+            contracts_mod.declare_contract,
+            req.project_path, req.node_id, req.node_level,
+            req.commands, req.queries,
+            req.events_emitted, req.events_consumed,
+            req.data_owned, req.data_read,
+            req.api_spec_url, req.sla,
+        )
+    except NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/contracts/{node_id}/check-break")
+async def check_contract_break(
+    node_id: str, project_path: str,
+    operation_name: str = "",
+    new_input_type: str = "",
+    new_output_type: str = "",
+):
+    """Check if changing an operation would break the declared contract."""
+    try:
+        return await _run_sync(
+            contracts_mod.check_contract_break,
+            project_path, node_id, operation_name, new_input_type, new_output_type,
+        )
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── Dependency annotation ────────────────────────────────────────────────────
+
+@app.patch("/api/dependencies/{dep_id}/annotate")
+async def annotate_dependency(dep_id: str, req: AnnotateDependencyReq):
+    """Enrich a dependency edge with semantic type, interface_points, payload_types."""
+    try:
+        return await _run_sync(
+            arch_mod.annotate_dependency,
+            req.project_path, dep_id,
+            edge_type=req.edge_type, edge_level=req.edge_level,
+            crosses_boundary=req.crosses_boundary, async_flag=req.async_flag,
+            direction=req.direction, interface_points=req.interface_points,
+            payload_types=req.payload_types, stability=req.stability, label=req.label,
+        )
+    except NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── Public API management ────────────────────────────────────────────────────
+
+@app.post("/api/components/{component_id}/promote")
+async def promote_to_contract(component_id: str, req: PromoteContractReq):
+    """Mark symbols as stable public API for a component."""
+    try:
+        return await _run_sync(
+            arch_mod.promote_to_contract, req.project_path, component_id, req.symbol_names
+        )
+    except NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── File remapping ───────────────────────────────────────────────────────────
+
+@app.post("/api/mappings/remap")
+async def remap_files(req: RemapFilesReq):
+    """Move files from one component to another (used when splitting components)."""
+    try:
+        result = await _run_sync(
+            arch_mod.remap_files_to_node,
+            req.project_path, req.file_paths, req.target_component_id,
+        )
+        _notify("mappings_changed")
+        return result
+    except NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── Migration ────────────────────────────────────────────────────────────────
+
+@app.post("/api/migrate/multilevel")
+async def migrate_multilevel(req: MigrateReq):
+    """
+    One-shot migration: restructure the flat graph into a 5-level hierarchy.
+    Creates system/domain nodes, promotes existing components, splits Core Engine,
+    annotates edges with semantic types, declares contracts. Safe to re-run.
+    """
+    try:
+        result = await _run_sync(migration_mod.bootstrap_multilevel_graph, req.project_path)
+        _notify("architecture_changed")
+        return result
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     uvicorn.run(

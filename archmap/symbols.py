@@ -5,8 +5,33 @@ Returns the source code of a named function or class given file + symbol name.
 from __future__ import annotations
 
 import ast
+import hashlib
 import re
 from pathlib import Path
+
+
+def _symbol_id(file_path: str, name: str) -> str:
+    """Stable content-addressed ID: same file + name always gives same ID."""
+    raw = f"{file_path}:{name}".encode()
+    return "sym_" + hashlib.sha256(raw).hexdigest()[:12]
+
+
+def _detect_visibility(name: str, is_exported: bool = False) -> str:
+    """Python: _ prefix = private. TS: no export = private (heuristic)."""
+    if name.startswith("_"):
+        return "private"
+    return "public"
+
+
+def _detect_entry_point(name: str, kind: str, doc: str = "") -> bool:
+    """Heuristic: is this a primary API surface / entry callable?"""
+    entry_names = {"main", "run", "app", "start", "create_app", "make_app", "cli", "serve"}
+    if name.lower() in entry_names:
+        return True
+    # Common FastAPI/Flask app factory pattern
+    if kind == "function" and name.startswith("create_") and "app" in name.lower():
+        return True
+    return False
 
 
 def extract_symbol(project_path: str, file_path: str, symbol_name: str) -> dict:
@@ -38,25 +63,24 @@ def extract_symbol(project_path: str, file_path: str, symbol_name: str) -> dict:
 def extract_all_symbols(project_path: str, file_path: str) -> dict:
     """
     Extract all top-level functions and classes from a source file.
-    Returns: {symbols: [str], language: str}
-    Symbol names follow the metadata.functions convention: "name()" for functions, "Name" for classes.
+    Returns: {symbols: [str], details: [{id, name, display_name, kind, visibility, is_entry_point, signature, doc}], language: str}
     """
     root = Path(project_path)
     fp = root / file_path
     try:
         source = fp.read_text(encoding="utf-8", errors="replace")
     except (OSError, FileNotFoundError):
-        return {"symbols": [], "language": ""}
+        return {"symbols": [], "details": [], "language": ""}
 
     ext = fp.suffix.lower()
 
     if ext == ".py":
-        return _extract_all_python(source)
+        return _extract_all_python(source, file_path)
     elif ext in {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}:
         lang = "typescript" if ext in {".ts", ".tsx"} else "javascript"
-        return _extract_all_ts(source, lang)
+        return _extract_all_ts(source, lang, file_path)
     else:
-        return {"symbols": [], "language": ext.lstrip(".")}
+        return {"symbols": [], "details": [], "language": ext.lstrip(".")}
 
 
 def get_file_content(project_path: str, file_path: str) -> dict:
@@ -136,18 +160,83 @@ def _extract_ts(source: str, file_path: str, name: str, language: str) -> dict:
 
 # ── Extract-all helpers ────────────────────────────────────────────────────────
 
-def _extract_all_python(source: str) -> dict:
+def _py_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+    """Build a compact signature string from an AST function node."""
+    args = node.args
+    params: list[str] = []
+    # positional args with optional annotations
+    defaults_offset = len(args.args) - len(args.defaults)
+    for i, arg in enumerate(args.args):
+        part = arg.arg
+        if arg.annotation:
+            part += f": {ast.unparse(arg.annotation)}"
+        if i >= defaults_offset:
+            part += f" = {ast.unparse(args.defaults[i - defaults_offset])}"
+        params.append(part)
+    if args.vararg:
+        params.append(f"*{args.vararg.arg}")
+    for kw in args.kwonlyargs:
+        params.append(kw.arg)
+    if args.kwarg:
+        params.append(f"**{args.kwarg.arg}")
+    ret = f" -> {ast.unparse(node.returns)}" if node.returns else ""
+    prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+    return f"{prefix} {node.name}({', '.join(params)}){ret}"
+
+
+def _py_docstring(node) -> str:
+    """Return the first line of a Python docstring, or ''."""
+    if (node.body and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)):
+        return node.body[0].value.value.strip().splitlines()[0]
+    return ""
+
+
+def _extract_all_python(source: str, file_path: str = "") -> dict:
     try:
         tree = ast.parse(source)
     except SyntaxError:
-        return {"symbols": [], "language": "python"}
-    symbols = []
-    for node in tree.body:  # top-level only — not ast.walk
+        return {"symbols": [], "details": [], "language": "python"}
+    symbols: list[str] = []
+    details: list[dict] = []
+    for node in tree.body:  # top-level only
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            symbols.append(f"{node.name}()")
+            raw_name = node.name
+            display = f"{raw_name}()"
+            sig = _py_signature(node)
+            doc = _py_docstring(node)
+            vis = _detect_visibility(raw_name)
+            entry = _detect_entry_point(raw_name, "function", doc)
+            sym_id = _symbol_id(file_path, raw_name)
+            symbols.append(display)
+            details.append({
+                "id": sym_id,
+                "name": raw_name,
+                "display_name": display,
+                "kind": "function",
+                "visibility": vis,
+                "is_entry_point": entry,
+                "signature": sig,
+                "doc": doc,
+            })
         elif isinstance(node, ast.ClassDef):
-            symbols.append(node.name)
-    return {"symbols": symbols, "language": "python"}
+            raw_name = node.name
+            vis = _detect_visibility(raw_name)
+            entry = _detect_entry_point(raw_name, "class")
+            sym_id = _symbol_id(file_path, raw_name)
+            symbols.append(raw_name)
+            details.append({
+                "id": sym_id,
+                "name": raw_name,
+                "display_name": raw_name,
+                "kind": "class",
+                "visibility": vis,
+                "is_entry_point": entry,
+                "signature": f"class {raw_name}",
+                "doc": _py_docstring(node),
+            })
+    return {"symbols": symbols, "details": details, "language": "python"}
 
 
 _TS_ALL_DEF = re.compile(
@@ -156,18 +245,57 @@ _TS_ALL_DEF = re.compile(
 )
 
 
-def _extract_all_ts(source: str, language: str) -> dict:
-    symbols = []
+_TS_JSDOC_LINE = re.compile(r"^\s*\*\s?(.+)")
+
+
+def _ts_jsdoc_before(lines: list[str], start: int) -> str:
+    """Scan upward from start to find a JSDoc comment and return its first description line."""
+    i = start - 1
+    block: list[str] = []
+    while i >= 0 and lines[i].strip() in ("", "*/") or (i >= 0 and lines[i].strip().startswith("*")):
+        block.append(lines[i])
+        i -= 1
+        if i >= 0 and lines[i].strip() == "/**":
+            for bl in reversed(block):
+                m = _TS_JSDOC_LINE.match(bl)
+                if m:
+                    return m.group(1).strip()
+            break
+    return ""
+
+
+def _extract_all_ts(source: str, language: str, file_path: str = "") -> dict:
+    symbols: list[str] = []
+    details: list[dict] = []
     seen: set[str] = set()
-    for line in source.splitlines():
+    lines = source.splitlines()
+    for idx, line in enumerate(lines):
         m = _TS_ALL_DEF.match(line.lstrip())
         if m:
             name = m.group(1)
             if name not in seen:
                 seen.add(name)
-                # Heuristic: class if starts with uppercase, function if lowercase
-                symbols.append(name if name[0].isupper() else f"{name}()")
-    return {"symbols": symbols, "language": language}
+                is_cls = name[0].isupper()
+                sym_name = name if is_cls else f"{name}()"
+                is_exported = "export" in line
+                vis = _detect_visibility(name, is_exported)
+                kind = "class" if is_cls else "function"
+                entry = _detect_entry_point(name, kind)
+                sym_id = _symbol_id(file_path, name)
+                sig_line = line.strip().rstrip("{").rstrip("=>").strip()
+                doc = _ts_jsdoc_before(lines, idx)
+                symbols.append(sym_name)
+                details.append({
+                    "id": sym_id,
+                    "name": name,
+                    "display_name": sym_name,
+                    "kind": kind,
+                    "visibility": vis,
+                    "is_entry_point": entry,
+                    "signature": sig_line,
+                    "doc": doc,
+                })
+    return {"symbols": symbols, "details": details, "language": language}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

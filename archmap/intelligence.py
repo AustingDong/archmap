@@ -9,17 +9,27 @@ from __future__ import annotations
 import re
 from collections import deque
 
-from archmap.store import load_arch, load_mappings, load_plan, load_meta
+from archmap.repo import load_arch, load_mappings, load_plan, load_meta
 
 _LAYER_ORDER = ["frontend", "backend", "database", "infra", "shared", "testing", "other"]
 
 
 # ── describe_architecture ──────────────────────────────────────────────────────
 
-def describe_architecture(project_path: str) -> str:
+def describe_architecture(project_path: str, level: int | None = None) -> str:
     """
-    Return a comprehensive markdown document describing the full architecture.
-    Reads components, files, dependencies, and plan items — no source files needed.
+    Return a comprehensive markdown document describing the architecture.
+
+    level — optional filter controlling the zoom level:
+      1  System only (the product node)
+      2  Domains only
+      3  Services (deploy units)
+      4  Components (default — shows all if no level given)
+      5  Modules (file-level nodes)
+      None  Show everything (original behavior)
+
+    When a level is specified, only nodes AT that level are shown as primary
+    entries; nodes above/below are referenced by name only.
     """
     meta     = load_meta(project_path)
     arch     = load_arch(project_path)
@@ -34,16 +44,27 @@ def describe_architecture(project_path: str) -> str:
     if not components:
         return "# Architecture\n\nNo components mapped yet. Run `init_project` then `scan_project` to get started."
 
+    # ── Filter by level if requested ──────────────────────────────────────────
+    if level is not None:
+        components = [c for c in components if c.get("level", 4) == level]
+        if not components:
+            return (
+                f"# Architecture (Level {level})\n\n"
+                f"No nodes found at level {level}. "
+                f"Levels: 1=system, 2=domain, 3=service, 4=component, 5=module\n"
+            )
+
     # ── Build indexes ──────────────────────────────────────────────────────────
-    name_map  = {c["id"]: c["name"]            for c in components}
-    layer_map = {c["id"]: c.get("layer", "other") for c in components}
+    all_comps = arch.get("components", [])
+    name_map  = {c["id"]: c["name"]            for c in all_comps}
+    layer_map = {c["id"]: c.get("layer", "other") for c in all_comps}
 
     # component_id → [(file_path, metadata)]
     comp_files: dict[str, list[tuple[str, dict]]] = {c["id"]: [] for c in components}
     for fp, rec in files_data.items():
         cid = rec.get("component_id")
         if cid in comp_files:
-            comp_files[cid].append((fp, rec.get("metadata", {})))
+            comp_files[cid].append((fp, rec))  # store full record, not just metadata
 
     # outgoing / incoming adjacency
     outgoing: dict[str, list[dict]] = {c["id"]: [] for c in components}
@@ -69,13 +90,15 @@ def describe_architecture(project_path: str) -> str:
     proj_name     = meta.get("name") or "this project"
     layer_names   = [l for l in _LAYER_ORDER if by_layer.get(l)]
     confirmed_dep = [d for d in dependencies if d.get("confidence") == "confirmed"]
+    level_names   = {1: "System", 2: "Domain", 3: "Service", 4: "Component", 5: "Module"}
 
+    level_label = f" — Level {level} ({level_names.get(level, '')})" if level else ""
     lines: list[str] = []
     lines += [
-        f"# Architecture: {proj_name}",
+        f"# Architecture: {proj_name}{level_label}",
         "",
         "## Overview",
-        f"{len(components)} component(s) across {len(layer_names)} layer(s). "
+        f"{len(components)} node(s) across {len(layer_names)} layer(s). "
         f"{len(files_data)} file(s) mapped, "
         f"{len(confirmed_dep)} confirmed / {len(dependencies) - len(confirmed_dep)} auto-inferred dependencies.",
         "",
@@ -92,32 +115,67 @@ def describe_architecture(project_path: str) -> str:
         for c in comps_in_layer:
             cid = c["id"]
             conf_tag = "" if c.get("confidence") == "confirmed" else " [auto-detected]"
-            lines.append(f"**{c['name']}**{conf_tag}  `{cid}`")
+            node_lv  = c.get("level", 4)
+            lv_tag   = f" [L{node_lv} {level_names.get(node_lv, '')}]" if node_lv != 4 else ""
+            lines.append(f"**{c['name']}**{conf_tag}{lv_tag}  `{cid}`")
+
+            # Parent in hierarchy
+            pid = c.get("parent_id", "")
+            if pid:
+                lines.append(f"  Parent: {name_map.get(pid, pid)} `{pid}`")
+
+            # Service metadata
+            if c.get("protocol"):
+                svc_parts = [f"protocol={c['protocol']}"]
+                if c.get("port"):
+                    svc_parts.append(f"port={c['port']}")
+                if c.get("deploy_unit"):
+                    svc_parts.append("deploy_unit=true")
+                lines.append(f"  Service: {', '.join(svc_parts)}")
 
             desc = c.get("description", "").strip()
             if desc:
                 lines.append(f"  {desc}")
 
+            # Public API contract
+            pub = c.get("public_api", [])
+            if pub:
+                lines.append(f"  Public API ({len(pub)}): {', '.join(pub[:10])}" +
+                              (" ..." if len(pub) > 10 else ""))
+
+            # Data ownership
+            owned = c.get("data_owned", [])
+            if owned:
+                lines.append(f"  Owns data: {', '.join(owned)}")
+
             cf = comp_files.get(cid, [])
             if cf:
                 file_parts = []
-                for fp, meta_f in cf:
-                    lang = meta_f.get("language", "")
+                for fp, rec in cf:
+                    lang = rec.get("language", "") or rec.get("metadata", {}).get("language", "")
                     file_parts.append(f"`{fp}`" + (f" [{lang}]" if lang else ""))
                 lines.append(f"  Files ({len(cf)}): {', '.join(file_parts)}")
 
                 all_syms: list[str] = []
-                for _, meta_f in cf:
-                    all_syms.extend(meta_f.get("functions", []))
+                for _, rec in cf:
+                    for sym in rec.get("symbols", []):
+                        all_syms.append(sym.get("display_name", sym.get("name", "")))
+                    if not rec.get("symbols"):
+                        all_syms.extend(rec.get("metadata", {}).get("functions", []))
                 if all_syms:
                     lines.append(f"  Symbols: {', '.join(all_syms)}")
 
             out = outgoing.get(cid, [])
             if out:
-                dep_parts = [
-                    f"{name_map.get(d['to_component'], d['to_component'])} ({d.get('label', 'uses')})"
-                    for d in out
-                ]
+                dep_parts = []
+                for d in out:
+                    tname = name_map.get(d['to_component'], d['to_component'])
+                    etype = d.get('edge_type', '')
+                    label = d.get('label', 'uses')
+                    tag   = etype if etype and etype != "invoke" else label
+                    pts   = d.get('interface_points', [])
+                    pts_s = f" via {','.join(pts[:3])}" if pts else ""
+                    dep_parts.append(f"{tname} [{tag}{pts_s}]")
                 lines.append(f"  Depends on: {', '.join(dep_parts)}")
 
             inc = incoming.get(cid, [])
@@ -137,9 +195,14 @@ def describe_architecture(project_path: str) -> str:
         for d in dependencies:
             fn    = name_map.get(d.get("from_component", ""), d.get("from_component", "?"))
             tn    = name_map.get(d.get("to_component", ""),   d.get("to_component", "?"))
+            etype = d.get("edge_type", "")
             label = d.get("label", "uses")
+            tag   = etype if etype and etype != "invoke" else label
             conf  = " [auto]" if d.get("confidence") == "auto" else ""
-            lines.append(f"  {fn} --[{label}]--> {tn}{conf}")
+            async_tag = " ~async~" if d.get("async_flag") else ""
+            pts   = d.get("interface_points", [])
+            pts_s = f" ({', '.join(pts[:3])})" if pts else ""
+            lines.append(f"  {fn} --[{tag}{async_tag}]--> {tn}{pts_s}{conf}")
     else:
         lines.append("  (no dependencies mapped yet)")
     lines.append("")
@@ -219,28 +282,55 @@ def find_related(project_path: str, query: str) -> dict:
     for fp, rec in files_data.items():
         meta_f = rec.get("metadata", {})
         cid    = rec.get("component_id", "")
+        lang   = rec.get("language", "") or meta_f.get("language", "")
+        desc   = meta_f.get("description", "")
         score  = (
             _score(fp, q) * 3
-            + _score(meta_f.get("description", ""), q)
+            + _score(desc, q)
             + _score(name_map.get(cid, ""), q)
         )
         if score > 0:
             file_results.append({"score": score, "file_path": fp, "component_id": cid,
                                   "component_name": name_map.get(cid, ""),
-                                  "language": meta_f.get("language", ""),
-                                  "description": meta_f.get("description", "")})
+                                  "language": lang,
+                                  "description": desc})
     file_results.sort(key=lambda x: x["score"], reverse=True)
 
-    # Symbols
+    # Symbols — check new-format symbols list and legacy metadata.functions
     sym_results: list[dict] = []
     for fp, rec in files_data.items():
-        meta_f = rec.get("metadata", {})
-        cid    = rec.get("component_id", "")
-        for sym in meta_f.get("functions", []):
-            score = _score(sym, q) * 4 + _score(fp, q)
+        cid = rec.get("component_id", "")
+        # New format: top-level symbols list
+        for sym in rec.get("symbols", []):
+            sym_display = sym.get("display_name", sym.get("name", ""))
+            score = _score(sym_display, q) * 4 + _score(fp, q)
             if score > 0:
-                sym_results.append({"score": score, "symbol": sym, "file_path": fp,
-                                     "component_id": cid, "component_name": name_map.get(cid, "")})
+                sym_results.append({
+                    "score": score,
+                    "symbol": sym_display,
+                    "symbol_id": sym.get("id", ""),
+                    "kind": sym.get("kind", "function"),
+                    "visibility": sym.get("visibility", "public"),
+                    "file_path": fp,
+                    "component_id": cid,
+                    "component_name": name_map.get(cid, ""),
+                })
+        # Legacy fallback: metadata.functions strings
+        if not rec.get("symbols"):
+            meta_f = rec.get("metadata", {})
+            for sym in meta_f.get("functions", []):
+                score = _score(sym, q) * 4 + _score(fp, q)
+                if score > 0:
+                    sym_results.append({
+                        "score": score,
+                        "symbol": sym,
+                        "symbol_id": "",
+                        "kind": "function",
+                        "visibility": "public",
+                        "file_path": fp,
+                        "component_id": cid,
+                        "component_name": name_map.get(cid, ""),
+                    })
     sym_results.sort(key=lambda x: x["score"], reverse=True)
 
     def drop_score(lst: list[dict]) -> list[dict]:
@@ -278,17 +368,41 @@ def get_symbol_index(project_path: str) -> list[dict]:
 
     index: list[dict] = []
     for fp, rec in mappings.get("files", {}).items():
-        meta_f = rec.get("metadata", {})
-        cid    = rec.get("component_id", "")
-        for sym in meta_f.get("functions", []):
+        cid = rec.get("component_id", "")
+        # New format: top-level symbols list
+        for sym in rec.get("symbols", []):
             index.append({
-                "symbol":          sym,
-                "file_path":       fp,
-                "language":        meta_f.get("language", ""),
-                "component_id":    cid,
-                "component_name":  name_map.get(cid, ""),
-                "component_layer": layer_map.get(cid, ""),
+                "symbol":           sym.get("display_name", sym.get("name", "")),
+                "symbol_id":        sym.get("id", ""),
+                "name":             sym.get("name", ""),
+                "kind":             sym.get("kind", "function"),
+                "visibility":       sym.get("visibility", "public"),
+                "is_entry_point":   sym.get("is_entry_point", False),
+                "signature":        sym.get("signature", ""),
+                "file_path":        fp,
+                "language":         rec.get("language", ""),
+                "component_id":     cid,
+                "component_name":   name_map.get(cid, ""),
+                "component_layer":  layer_map.get(cid, ""),
             })
+        # Legacy fallback
+        if not rec.get("symbols"):
+            meta_f = rec.get("metadata", {})
+            for sym in meta_f.get("functions", []):
+                index.append({
+                    "symbol":          sym,
+                    "symbol_id":       "",
+                    "name":            sym.rstrip("()"),
+                    "kind":            "function",
+                    "visibility":      "public",
+                    "is_entry_point":  False,
+                    "signature":       "",
+                    "file_path":       fp,
+                    "language":        meta_f.get("language", ""),
+                    "component_id":    cid,
+                    "component_name":  name_map.get(cid, ""),
+                    "component_layer": layer_map.get(cid, ""),
+                })
 
     index.sort(key=lambda x: (x["component_name"], x["file_path"], x["symbol"]))
     return index

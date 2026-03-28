@@ -7,9 +7,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from archmap.store import load_arch, normalize_path
+from archmap.repo import load_arch, normalize_path
 from archmap.architecture import add_component, list_components
-from archmap.mapping import bulk_map
+from archmap.mapping import bulk_map, is_source_file
 
 # Directories to always skip
 SKIP_DIRS = {
@@ -153,6 +153,8 @@ def scan_project(
                 for fname in filenames:
                     if count >= max_files_per_component:
                         break
+                    if not is_source_file(fname):
+                        continue
                     try:
                         full = os.path.join(dirpath, fname)
                         rel = normalize_path(project_path, full)

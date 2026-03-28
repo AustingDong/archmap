@@ -32,7 +32,20 @@
       "mcp__archmap__unmap_file",
       "Bash(npx tsc:*)",
       "Bash(cd ui:*)",
-      "Bash(./node_modules/.bin/tsc --noEmit 2>&1)"
+      "Bash(./node_modules/.bin/tsc --noEmit 2>&1)",
+      "mcp__archmap__list_component_files",
+      "mcp__archmap__describe_architecture",
+      "mcp__archmap__find_related",
+      "mcp__archmap__read_function",
+      "mcp__archmap__get_coding_context",
+      "mcp__archmap__remove_dependency",
+      "Bash(pip install:*)",
+      "Bash(ui/node_modules/.bin/tsc --noEmit -p ui/tsconfig.app.json 2>&1)",
+      "Bash(ls:*)",
+      "WebFetch(domain:sourcegraph.com)",
+      "WebFetch(domain:deusdata.github.io)",
+      "WebFetch(domain:mcpmarket.com)",
+      "WebFetch(domain:mcpstore.co)"
     ]
   }
 }

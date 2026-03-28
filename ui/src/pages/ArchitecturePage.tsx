@@ -27,8 +27,14 @@ import {
   getFileContent, getFileSymbol,
   mapFile, unmapFile, annotateFile, syncFileSymbols,
   describeArchitecture, findRelated, tracePath,
+  getContract, migrateMultilevel, getWorkContext, getChangeSurface, resetGraph,
 } from '../api/archMapApi'
-import type { Component, Dependency, FileMapping, Layer, ComponentMetrics, ComponentImpact, FileContent, SymbolExtract, RelatedSearchResult, PathTrace } from '../types'
+import type {
+  Component, Dependency, FileMapping, Layer,
+  ComponentMetrics, ComponentImpact, FileContent, SymbolExtract,
+  RelatedSearchResult, PathTrace, Contract, WorkContext, NodeLevel,
+} from '../types'
+import { EDGE_TYPE_COLOR, LEVEL_LABELS } from '../types'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -96,23 +102,39 @@ function FlowEdge({ id, source, target, data, markerEnd }: EdgeProps) {
   const { sx, sy, tx, ty, srcPos, tgtPos } = getFloatingParams(srcNode, tgtNode)
   const [path] = getBezierPath({ sourceX: sx, sourceY: sy, sourcePosition: srcPos, targetX: tx, targetY: ty, targetPosition: tgtPos })
 
-  const isAuto = (data as any)?.confidence === 'auto'
-  const color = isAuto ? '#64748b' : '#60a5fa'
+  const isAuto   = (data as any)?.confidence === 'auto'
+  const edgeType = (data as any)?.edge_type as string | undefined
+  const isAsync  = (data as any)?.async_flag === true
+  const isCrossBoundary = (data as any)?.crosses_boundary === true
+  const stability = (data as any)?.stability as string | undefined
+
+  // Color: edge_type takes priority, then auto/confirmed fallback
+  const color = edgeType && EDGE_TYPE_COLOR[edgeType]
+    ? EDGE_TYPE_COLOR[edgeType]
+    : (isAuto ? '#64748b' : '#60a5fa')
+
+  // Thicker for cross-boundary edges; thinner for deprecated/internal
+  const strokeW = isCrossBoundary ? 2.4 : isAuto ? 1.2 : 1.8
+  const opacity  = stability === 'deprecated' ? 0.35 : isAuto ? 0.6 : 0.9
+
+  // Dash: async = long dash, auto = short dash, deprecated = dot-dash
+  const dash = isAsync ? '10 5' : stability === 'deprecated' ? '4 6' : isAuto ? '6 4' : undefined
+
   const filterId = `glow-${id}`
 
   return (
     <g>
       <defs>
         <filter id={filterId} x="-60%" y="-60%" width="220%" height="220%">
-          <feGaussianBlur stdDeviation={isAuto ? 2 : 3} result="blur" />
+          <feGaussianBlur stdDeviation={isCrossBoundary ? 4 : isAuto ? 2 : 3} result="blur" />
           <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
         </filter>
       </defs>
 
-      {/* Wide glow halo behind the line */}
+      {/* Wide glow halo */}
       <path
         d={path} fill="none"
-        stroke={color} strokeWidth={isAuto ? 5 : 8} strokeOpacity={0.12}
+        stroke={color} strokeWidth={strokeW * 4} strokeOpacity={isCrossBoundary ? 0.18 : 0.12}
         filter={`url(#${filterId})`}
       />
 
@@ -123,26 +145,17 @@ function FlowEdge({ id, source, target, data, markerEnd }: EdgeProps) {
         d={path}
         fill="none"
         stroke={color}
-        strokeWidth={isAuto ? 1.2 : 1.8}
-        strokeDasharray={isAuto ? '6 4' : undefined}
-        strokeOpacity={isAuto ? 0.6 : 0.9}
+        strokeWidth={strokeW}
+        strokeDasharray={dash}
+        strokeOpacity={opacity}
         markerEnd={markerEnd as string}
         style={{ color }}
       />
 
-      {/* Animated travelling dot for auto/inferred edges */}
-      {isAuto && (
-        <circle r={3} fill={color} fillOpacity={0.85}>
-          <animateMotion dur="2.4s" repeatCount="indefinite" path={path} />
-        </circle>
-      )}
-
-      {/* Subtle pulse dot for confirmed edges */}
-      {!isAuto && (
-        <circle r={2.5} fill={color} fillOpacity={0.7}>
-          <animateMotion dur="3s" repeatCount="indefinite" path={path} />
-        </circle>
-      )}
+      {/* Travelling dot — async edges get larger dot */}
+      <circle r={isAsync ? 4 : isAuto ? 3 : 2.5} fill={color} fillOpacity={0.85}>
+        <animateMotion dur={isAsync ? '1.8s' : isAuto ? '2.4s' : '3s'} repeatCount="indefinite" path={path} />
+      </circle>
     </g>
   )
 }
@@ -252,14 +265,29 @@ function ComponentNode({ data }: { data: any }) {
           </button>
         </div>
 
-        {/* Layer + confidence pills */}
-        <div style={{ display: 'flex', gap: 5, marginTop: 8 }}>
+        {/* Layer + level + confidence pills */}
+        <div style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
           <span style={{
             display: 'inline-flex', alignItems: 'center',
             padding: '1px 8px', borderRadius: 99, fontSize: 9.5, fontWeight: 600,
             letterSpacing: '0.04em', textTransform: 'capitalize',
             background: c + '18', color: c, border: `1px solid ${c}33`,
           }}>{data.layer}</span>
+          {data.level && data.level !== 4 && (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center',
+              padding: '1px 7px', borderRadius: 99, fontSize: 9, fontWeight: 700,
+              background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.3)',
+              letterSpacing: '0.02em',
+            }}>L{data.level} {LEVEL_LABELS[data.level as NodeLevel] ?? ''}</span>
+          )}
+          {data.public_api?.length > 0 && (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center',
+              padding: '1px 7px', borderRadius: 99, fontSize: 9, fontWeight: 600,
+              background: 'rgba(34,197,94,0.12)', color: '#4ade80', border: '1px solid rgba(34,197,94,0.25)',
+            }}>{data.public_api.length} API</span>
+          )}
           {data.confidence === 'auto' && (
             <span style={{
               display: 'inline-flex', alignItems: 'center',
@@ -886,12 +914,19 @@ export default function ArchitecturePage() {
   const [inferring, setInferring] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
   const [showIntel, setShowIntel] = useState(false)
+  const [showCycles, setShowCycles] = useState(false)
   const [expandedComponents, setExpandedComponents] = useState<Set<string>>(new Set())
   const [loadingComponents, setLoadingComponents] = useState<Set<string>>(new Set())
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set())
   const [loadingFiles, setLoadingFiles] = useState<Set<string>>(new Set())
   const [filePanel, setFilePanel] = useState<{ file: FileMapping; nodeId: string } | null>(null)
   const [symbolPanel, setSymbolPanel] = useState<{ symbol: string; filePath: string } | null>(null)
+  // Multi-level graph state
+  const [levelFilter, setLevelFilter] = useState<NodeLevel | null>(null)
+  const [migrating, setMigrating] = useState(false)
+  const [showEdgeLegend, setShowEdgeLegend] = useState(false)
+  const [showResetDialog, setShowResetDialog] = useState(false)
+  const [resetting, setResetting] = useState(false)
 
   const graphKey = projectPath ? `archmap-graph::${btoa(projectPath)}` : null
 
@@ -977,7 +1012,10 @@ export default function ArchitecturePage() {
             const fileNode = fileNodes.find(n => n.id === fileNodeId)
             if (!fileNode) continue
             const file = fileNode.data?.file as FileMapping | undefined
-            const symbols: string[] = file?.metadata?.functions ?? []
+            const rawSymbols: string[] = (file?.symbols ?? []).map(
+              (s: any) => s.display_name ?? s.name ?? ''
+            ).filter(Boolean)
+            const symbols: string[] = rawSymbols.length > 0 ? rawSymbols : (file?.metadata?.functions ?? [])
             if (symbols.length === 0) continue
             const { x: fpx, y: fpy } = fileNode.position
             const fParentColor = (fileNode.data?.parentColor as string) ?? '#64748b'
@@ -1025,6 +1063,31 @@ export default function ArchitecturePage() {
   }, [projectPath, graphKey])
 
   useEffect(() => { load() }, [load])
+
+  // Rebuild graph when level filter changes (without refetching from server)
+  const prevLevelFilter = React.useRef<NodeLevel | null | undefined>(undefined)
+  useEffect(() => {
+    // Skip initial mount (load() handles the first render)
+    if (prevLevelFilter.current === undefined) { prevLevelFilter.current = levelFilter; return }
+    if (prevLevelFilter.current === levelFilter) return
+    prevLevelFilter.current = levelFilter
+    if (components.length === 0) return
+    const filtered = levelFilter !== null
+      ? components.filter(c => (c.level ?? 4) === levelFilter)
+      : components
+    const filteredIds = new Set(filtered.map(c => c.id))
+    const filteredDeps = dependencies.filter(
+      d => filteredIds.has(d.from_component) && filteredIds.has(d.to_component)
+    )
+    const rawNodes = buildNodes(filtered)
+    const rawEdges = buildEdges(filteredDeps)
+    const laid = layoutWithDagre(rawNodes, rawEdges)
+    // Drop file/symbol expansions when filter changes
+    setNodes(laid)
+    setEdges(rawEdges)
+    setExpandedComponents(new Set())
+    setExpandedFiles(new Set())
+  }, [levelFilter, components, dependencies])
 
   const toggleNode = useCallback(async (nodeId: string) => {
     // Collapse: remove file nodes + their symbol children
@@ -1128,7 +1191,8 @@ export default function ArchitecturePage() {
       const fileNode = prev.find(n => n.id === fileNodeId)
       if (!fileNode) return prev
       const file = fileNode.data?.file as FileMapping | undefined
-      const symbols: string[] = file?.metadata?.functions ?? []
+      const rawSyms: string[] = (file?.symbols ?? []).map((s: any) => s.display_name ?? s.name ?? '').filter(Boolean)
+      const symbols: string[] = rawSyms.length > 0 ? rawSyms : (file?.metadata?.functions ?? [])
       if (symbols.length === 0) return prev
       const { x: px, y: py } = fileNode.position
       const parentColor = (fileNode.data?.parentColor as string) ?? '#64748b'
@@ -1152,7 +1216,8 @@ export default function ArchitecturePage() {
     setEdges(prev => {
       // Get symbol count from current nodes to build edges
       const file = nodes.find(n => n.id === fileNodeId)?.data?.file as FileMapping | undefined
-      const count = file?.metadata?.functions?.length ?? 0
+      const symArr = file?.symbols ?? []
+      const count = symArr.length > 0 ? symArr.length : (file?.metadata?.functions?.length ?? 0)
       const parentColor = (nodes.find(n => n.id === fileNodeId)?.data?.parentColor as string) ?? '#64748b'
       const symEdges: Edge[] = Array.from({ length: count }, (_, i) => ({
         id: `symedge::${fileNodeId}::${i}`,
@@ -1173,7 +1238,8 @@ export default function ArchitecturePage() {
 
   // Rebuild symbol nodes for a file node using the provided updated file data (avoids stale closure)
   const refreshSymbolNodes = useCallback((fileNodeId: string, updatedFile: FileMapping) => {
-    const symbols: string[] = updatedFile.metadata?.functions ?? []
+    const rawSyms2: string[] = (updatedFile.symbols ?? []).map((s: any) => s.display_name ?? s.name ?? '').filter(Boolean)
+    const symbols: string[] = rawSyms2.length > 0 ? rawSyms2 : (updatedFile.metadata?.functions ?? [])
     // Remove old sym nodes + edges
     setNodes(prev => prev.filter(n => !n.id.startsWith(`sym::${fileNodeId}::`)))
     setEdges(prev => prev.filter(e => !e.id.startsWith(`symedge::${fileNodeId}::`)))
@@ -1334,7 +1400,7 @@ export default function ArchitecturePage() {
       const result = await inferDependencies(projectPath)
       if (result.added > 0) {
         setDependencies(prev => [...prev, ...result.dependencies])
-        setEdges(prev => [...prev, ...result.dependencies.map(depToEdge)])
+        setEdges(prev => [...prev, ...result.dependencies.map(d => depToEdge(d, false))])
         toast('success', `${result.added} dep${result.added !== 1 ? 's' : ''} inferred — click dashed edges to confirm`)
       } else {
         toast('success', 'No new dependencies found')
@@ -1396,7 +1462,12 @@ export default function ArchitecturePage() {
             }
             return n
           })}
-          edges={edges}
+          edges={showCycles ? (() => {
+            const cycleIds = computeCycleEdgeIds(dependencies)
+            return edges.map(e => cycleIds.has(e.id)
+              ? { ...e, data: { ...e.data, isCycle: true }, markerEnd: { type: MarkerType.ArrowClosed, width: 10, height: 10, color: '#f87171' }, labelStyle: { fill: '#f87171', fontSize: 9.5 } }
+              : e)
+          })() : edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
@@ -1468,6 +1539,24 @@ export default function ArchitecturePage() {
                 {inferring ? <span className="spinner" /> : <><GitBranch size={12} /> Infer Deps</>}
               </button>
               <div style={{ width: 1, background: 'rgba(255,255,255,0.08)', margin: '0 2px' }} />
+              {/* Level filter tabs */}
+              {([null, 1, 2, 3, 4, 5] as (NodeLevel | null)[]).map(lv => (
+                <button
+                  key={lv ?? 'all'}
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setLevelFilter(lv)}
+                  style={{
+                    color: levelFilter === lv ? '#a78bfa' : undefined,
+                    background: levelFilter === lv ? 'rgba(139,92,246,0.12)' : undefined,
+                    border: levelFilter === lv ? '1px solid rgba(139,92,246,0.3)' : undefined,
+                    fontSize: 10, padding: '3px 7px',
+                  }}
+                  title={lv === null ? 'Show all levels' : `Show only L${lv} (${LEVEL_LABELS[lv]})`}
+                >
+                  {lv === null ? 'All' : `L${lv}`}
+                </button>
+              ))}
+              <div style={{ width: 1, background: 'rgba(255,255,255,0.08)', margin: '0 2px' }} />
               <button
                 className="btn btn-ghost btn-sm"
                 onClick={() => setShowIntel(v => !v)}
@@ -1475,6 +1564,41 @@ export default function ArchitecturePage() {
                 style={{ color: showIntel ? '#60a5fa' : undefined, background: showIntel ? 'rgba(96,165,250,0.1)' : undefined }}
               >
                 <Map size={12} /> Intelligence
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowCycles(v => !v)}
+                title="Highlight dependency cycles in red"
+                style={{ color: showCycles ? '#f87171' : undefined, background: showCycles ? 'rgba(248,113,113,0.1)' : undefined }}
+              >
+                <AlertTriangle size={12} /> Cycles
+              </button>
+              <div style={{ width: 1, background: 'rgba(255,255,255,0.08)', margin: '0 2px' }} />
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={async () => {
+                  if (!projectPath) return
+                  setMigrating(true)
+                  try {
+                    const r = await migrateMultilevel(projectPath)
+                    toast('success', r.summary)
+                    await load()
+                  } catch (e: any) { toast('error', e.message) }
+                  finally { setMigrating(false) }
+                }}
+                disabled={migrating}
+                title="Bootstrap 5-level hierarchy: create domains, annotate edges, declare contracts"
+                style={{ color: '#f59e0b', fontSize: 10 }}
+              >
+                {migrating ? <span className="spinner" /> : <><Layers size={11} /> Migrate Graph</>}
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowResetDialog(true)}
+                title="Reset graph and rebuild with AI agent (/bootstrap-arch)"
+                style={{ color: '#f87171', fontSize: 10 }}
+              >
+                <RefreshCw size={11} /> Rebuild
               </button>
             </div>
           </Panel>
@@ -1501,14 +1625,20 @@ export default function ArchitecturePage() {
               })}
 
               <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '10px 0' }} />
-              <p style={{ fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>Edges</p>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#60a5fa" strokeWidth="2" /><circle cx="16" cy="4" r="2.5" fill="#60a5fa" /></svg>
-                <span style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.45)' }}>confirmed</span>
+              <p style={{ fontSize: 9, fontWeight: 700, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>Edge Types</p>
+              {(Object.entries(EDGE_TYPE_COLOR) as [string, string][]).map(([et, ec]) => (
+                <div key={et} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke={ec} strokeWidth="2" /><circle cx="18" cy="4" r="2.5" fill={ec} /></svg>
+                  <span style={{ fontSize: 9.5, color: 'rgba(255,255,255,0.45)', textTransform: 'capitalize' }}>{et.replace('_', ' ')}</span>
+                </div>
+              ))}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, marginBottom: 6 }}>
+                <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="10 5" /></svg>
+                <span style={{ fontSize: 9.5, color: 'rgba(255,255,255,0.35)' }}>async (dashed)</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#64748b" strokeWidth="1.5" strokeDasharray="5 3" /></svg>
-                <span style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.45)' }}>inferred · click to confirm</span>
+                <span style={{ fontSize: 9.5, color: 'rgba(255,255,255,0.45)' }}>inferred · click to confirm</span>
               </div>
 
               <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '0 0 10px' }} />
@@ -1601,6 +1731,58 @@ export default function ArchitecturePage() {
           toast={toast}
         />
       )}
+
+      {showResetDialog && (
+        <Modal title="Rebuild Architecture Graph" onClose={() => !resetting && setShowResetDialog(false)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+              This will <strong style={{ color: '#f87171' }}>erase all components, dependencies, file mappings,
+              and contracts</strong> for this project. Plan items and ADRs are preserved.
+            </p>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
+              After resetting, use the <strong style={{ color: '#a78bfa' }}>/bootstrap-arch</strong> skill
+              in Claude Code to rebuild the graph with AI-driven analysis — it reads your project
+              structure and populates the graph with proper domains, services, components, and contracts.
+            </p>
+            <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(167,139,250,0.08)', border: '1px solid rgba(167,139,250,0.2)' }}>
+              <p style={{ fontSize: 11, fontFamily: 'monospace', color: '#c4b5fd', margin: 0, lineHeight: 1.7 }}>
+                # In Claude Code terminal:<br />
+                /bootstrap-arch
+              </p>
+            </div>
+            <p style={{ fontSize: 10.5, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+              The skill guides Claude through 9 phases: orient → L1 system → L2 domains →
+              L3 services → L4 components → file mapping → dependencies → contracts → verify.
+            </p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                className="btn btn-ghost"
+                onClick={() => setShowResetDialog(false)}
+                disabled={resetting}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-danger"
+                disabled={resetting}
+                onClick={async () => {
+                  if (!projectPath) return
+                  setResetting(true)
+                  try {
+                    const r = await resetGraph(projectPath)
+                    toast('success', `Graph cleared — ${r.cleared_components} components, ${r.cleared_file_mappings} files removed`)
+                    setShowResetDialog(false)
+                    await load()
+                  } catch (e: any) { toast('error', e.message) }
+                  finally { setResetting(false) }
+                }}
+              >
+                {resetting ? <span className="spinner" /> : <><Trash2 size={13} /> Reset Graph</>}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
@@ -1613,6 +1795,7 @@ function ComponentPanel({ comp, projectPath, deps, components, onClose, onDelete
   const [form, setForm] = useState({ name: comp.name, description: comp.description, layer: comp.layer })
   const [metrics, setMetrics] = useState<ComponentMetrics | null>(null)
   const [impact, setImpact] = useState<ComponentImpact | null>(null)
+  const [contract, setContract] = useState<Contract | null>(null)
   const [compFiles, setCompFiles] = useState<FileMapping[]>([])
   const [mapInput, setMapInput] = useState('')
   const [mapping, setMapping] = useState(false)
@@ -1624,10 +1807,12 @@ function ComponentPanel({ comp, projectPath, deps, components, onClose, onDelete
     setEditing(false)
     setMetrics(null)
     setImpact(null)
+    setContract(null)
     setCompFiles([])
-    // Fetch metrics, impact and file list in parallel
+    // Fetch metrics, impact, contract and file list in parallel
     getComponentMetrics(projectPath, comp.id).then(setMetrics).catch(() => {})
     getComponentImpact(projectPath, comp.id).then(setImpact).catch(() => {})
+    getContract(projectPath, comp.id).then(setContract).catch(() => {})
     listComponentFiles(projectPath, comp.id).then(setCompFiles).catch(() => {})
   }, [comp.id, projectPath])
 
@@ -1813,6 +1998,81 @@ function ComponentPanel({ comp, projectPath, deps, components, onClose, onDelete
                 </>
               )}
             </Section>
+
+            {/* ── Interface Contract ───────────────────────────────── */}
+            {contract && (
+              <Section icon={<Zap size={11} />} label={`Interface Contract${contract.declared ? ' ✓' : ' (undeclared)'}`}>
+                {!contract.declared ? (
+                  <p style={{ fontSize: 10.5, color: 'var(--text-muted)' }}>No contract declared yet. Use <code style={{ fontSize: 9, opacity: 0.7 }}>declare_contract</code> MCP tool to define the public interface.</p>
+                ) : (
+                  <>
+                    {/* Node hierarchy metadata */}
+                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 10 }}>
+                      {comp.level && (
+                        <span style={{ padding: '2px 8px', borderRadius: 99, fontSize: 9.5, background: 'rgba(167,139,250,0.12)', color: '#a78bfa', border: '1px solid rgba(167,139,250,0.25)' }}>
+                          L{comp.level} · {LEVEL_LABELS[comp.level as NodeLevel] ?? ''}
+                        </span>
+                      )}
+                      {comp.stability && comp.stability !== 'stable' && (
+                        <span style={{ padding: '2px 8px', borderRadius: 99, fontSize: 9.5, background: comp.stability === 'deprecated' ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.12)', color: comp.stability === 'deprecated' ? '#f87171' : '#f59e0b', border: `1px solid ${comp.stability === 'deprecated' ? 'rgba(239,68,68,0.25)' : 'rgba(245,158,11,0.25)'}` }}>
+                          {comp.stability}
+                        </span>
+                      )}
+                    </div>
+                    {contract.sla && (
+                      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 8, padding: '4px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: 5, border: '1px solid rgba(255,255,255,0.07)' }}>
+                        SLA: <span style={{ color: 'var(--text-secondary)' }}>{contract.sla}</span>
+                      </div>
+                    )}
+                    {contract.commands.length > 0 && (
+                      <div style={{ marginBottom: 8 }}>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: '#f97316', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>Commands</div>
+                        {contract.commands.map((op: any) => (
+                          <div key={op.name} style={{ fontSize: 10, padding: '3px 7px', marginBottom: 2, borderRadius: 5, background: 'rgba(249,115,22,0.06)', border: '1px solid rgba(249,115,22,0.15)', fontFamily: 'monospace', color: '#fed7aa' }}>
+                            {op.name}
+                            {op.input_type && <span style={{ color: 'var(--text-muted)', marginLeft: 5 }}>({op.input_type})</span>}
+                            {op.output_type && <span style={{ color: 'var(--text-muted)' }}> → {op.output_type}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {contract.queries.length > 0 && (
+                      <div style={{ marginBottom: 8 }}>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>Queries</div>
+                        {contract.queries.map((op: any) => (
+                          <div key={op.name} style={{ fontSize: 10, padding: '3px 7px', marginBottom: 2, borderRadius: 5, background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.15)', fontFamily: 'monospace', color: '#bfdbfe' }}>
+                            {op.name}
+                            {op.output_type && <span style={{ color: 'var(--text-muted)' }}> → {op.output_type}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {contract.events_emitted.length > 0 && (
+                      <div style={{ marginBottom: 8 }}>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: '#22c55e', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>Events Emitted</div>
+                        {contract.events_emitted.map((ev: any) => (
+                          <div key={ev.name} style={{ fontSize: 10, padding: '3px 7px', marginBottom: 2, borderRadius: 5, background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', fontFamily: 'monospace', color: '#bbf7d0' }}>
+                            {ev.name}
+                            {ev.payload_type && <span style={{ color: 'var(--text-muted)', marginLeft: 5 }}>[{ev.payload_type}]</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {contract.data_owned.length > 0 && (
+                      <div style={{ marginBottom: 4 }}>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: '#fbbf24', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>Data Owned</div>
+                        {contract.data_owned.map((dt: any) => (
+                          <div key={dt.type_name} style={{ fontSize: 10, padding: '3px 7px', marginBottom: 2, borderRadius: 5, background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.15)', fontFamily: 'monospace', color: '#fde68a' }}>
+                            {dt.type_name}
+                            {dt.authoritative && <span style={{ fontSize: 8, marginLeft: 5, color: '#fbbf24' }}>authoritative</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </Section>
+            )}
 
             <Section icon={<GitBranch size={11} />} label={`Connections (${connectedDeps.length})`}>
               {connectedDeps.length === 0
@@ -2178,30 +2438,81 @@ function AddComponentModal({ projectPath, onClose, onAdded, toast }: any) {
 function buildNodes(components: Component[]): Node[] {
   return components.map(c => ({
     id: c.id, type: 'component',
-    data: { label: c.name, layer: c.layer, confidence: c.confidence },
+    data: {
+      label: c.name,
+      layer: c.layer,
+      confidence: c.confidence,
+      level: c.level ?? 4,
+      parent_id: c.parent_id ?? '',
+      public_api: c.public_api ?? [],
+      stability: c.stability ?? 'stable',
+      protocol: c.protocol ?? '',
+    },
     position: { x: 0, y: 0 },
   }))
 }
 
-function depToEdge(d: Dependency): Edge {
-  const isAuto = d.confidence === 'auto'
+function depToEdge(d: Dependency, isCycle = false): Edge {
+  const isAuto   = d.confidence === 'auto'
+  const edgeType = d.edge_type ?? ''
+  const edgeColor = EDGE_TYPE_COLOR[edgeType]
+  const color = isCycle ? '#f87171' : edgeColor ?? (isAuto ? '#64748b' : '#60a5fa')
+  // Show edge_type or label (whichever is more informative)
+  const edgeLabel = edgeType && edgeType !== 'invoke' ? edgeType.replace('_', ' ') : d.label
   return {
     id: d.id,
     source: d.from_component,
     target: d.to_component,
     type: 'floating',
-    label: d.label,
-    markerEnd: { type: MarkerType.ArrowClosed, width: 10, height: 10, color: isAuto ? '#64748b' : '#60a5fa' },
-    labelStyle: { fill: isAuto ? '#475569' : '#64748b', fontSize: 9.5 },
+    label: edgeLabel,
+    markerEnd: { type: MarkerType.ArrowClosed, width: 10, height: 10, color },
+    labelStyle: { fill: isCycle ? '#f87171' : edgeColor ?? (isAuto ? '#475569' : '#64748b'), fontSize: 9.5 },
     labelBgStyle: { fill: 'rgba(8,12,20,0.85)', fillOpacity: 1 },
     labelBgPadding: [4, 3] as [number, number],
     labelBgBorderRadius: 4,
-    data: { confidence: d.confidence },
+    data: {
+      confidence: d.confidence,
+      isCycle,
+      edge_type: d.edge_type,
+      async_flag: d.async_flag,
+      crosses_boundary: d.crosses_boundary,
+      stability: d.stability,
+      interface_points: d.interface_points,
+      payload_types: d.payload_types,
+    },
   }
 }
 
 function buildEdges(deps: Dependency[]): Edge[] {
-  return deps.map(depToEdge)
+  return deps.map(d => depToEdge(d, false))
+}
+
+function computeCycleEdgeIds(deps: Dependency[]): Set<string> {
+  // BFS to find which component IDs are in a cycle, then mark edges between them
+  const outgoing: Record<string, string[]> = {}
+  for (const d of deps) {
+    if (!outgoing[d.from_component]) outgoing[d.from_component] = []
+    outgoing[d.from_component].push(d.to_component)
+  }
+  const bfs = (start: string): Set<string> => {
+    const visited = new Set<string>()
+    const queue = [start]
+    while (queue.length) {
+      const cur = queue.shift()!
+      for (const nxt of outgoing[cur] ?? []) {
+        if (!visited.has(nxt) && nxt !== start) { visited.add(nxt); queue.push(nxt) }
+      }
+    }
+    return visited
+  }
+  const cycleNodes = new Set<string>()
+  for (const d of deps) {
+    if (bfs(d.to_component).has(d.from_component)) {
+      cycleNodes.add(d.from_component)
+      cycleNodes.add(d.to_component)
+    }
+  }
+  return new Set(deps.filter(d => cycleNodes.has(d.from_component) && cycleNodes.has(d.to_component)).map(d => d.id))
 }
 
 // ── UI primitives ──────────────────────────────────────────────────────────────

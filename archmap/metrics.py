@@ -51,6 +51,8 @@ def _git_churn(project_root: Path, rel_path: str) -> int:
             cwd=project_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=5,
         )
         return sum(1 for line in result.stdout.splitlines() if line.strip())

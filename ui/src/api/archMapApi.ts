@@ -62,6 +62,11 @@ export const initProject = (project_path: string, name?: string) =>
 export const projectStatus = (project_path: string) =>
   get<import('../types').ProjectStatus>(`${BASE}/project/status`, { project_path })
 
+export const resetGraph = (project_path: string) =>
+  post<{ cleared_components: number; cleared_dependencies: number; cleared_file_mappings: number }>(
+    `/project/reset?project_path=${encodeURIComponent(project_path)}`, {}
+  )
+
 // ─── Architecture ─────────────────────────────────────────────────────────────
 
 export const getArchitecture = (project_path: string) =>
@@ -180,8 +185,11 @@ export const getCodingContext = (project_path: string, component_id: string) =>
 
 // ─── Architecture intelligence ────────────────────────────────────────────────
 
-export const describeArchitecture = (project_path: string) =>
-  get<{ text: string }>(`${BASE}/architecture/describe`, { project_path })
+export const describeArchitecture = (project_path: string, level?: number) =>
+  get<{ text: string }>(`${BASE}/architecture/describe`, {
+    project_path,
+    ...(level != null ? { level: String(level) } : {}),
+  })
 
 export const findRelated = (project_path: string, q: string) =>
   get<import('../types').RelatedSearchResult>(`${BASE}/architecture/search`, { project_path, q })
@@ -191,3 +199,84 @@ export const getSymbolIndex = (project_path: string) =>
 
 export const tracePath = (project_path: string, from_id: string, to_id: string) =>
   get<import('../types').PathTrace>(`${BASE}/architecture/trace`, { project_path, from_id, to_id })
+
+// ─── Multi-level graph ────────────────────────────────────────────────────────
+
+export const getDomainMap = (project_path: string) =>
+  get<import('../types').DomainMap>(`${BASE}/graph/domain-map`, { project_path })
+
+export const describeNode = (project_path: string, node_id: string, show_files = false) =>
+  get<import('../types').NodeDetail>(`${BASE}/graph/node/${node_id}`, {
+    project_path, show_files: String(show_files),
+  })
+
+export const listChildren = (project_path: string, parent_id: string) =>
+  get<import('../types').Component[]>(`${BASE}/graph/children/${parent_id}`, { project_path })
+
+export const getWorkContext = (project_path: string, node_id: string, task = '') =>
+  get<import('../types').WorkContext>(`${BASE}/work-context/${node_id}`, { project_path, task })
+
+export const getChangeSurface = (project_path: string, symbols: string[]) =>
+  get<import('../types').ChangeSurface>(`${BASE}/change-surface`, {
+    project_path, symbols: symbols.join(','),
+  })
+
+// ─── Contracts ────────────────────────────────────────────────────────────────
+
+export const listContracts = (project_path: string, node_level?: number) =>
+  get<import('../types').Contract[]>(`${BASE}/contracts`, {
+    project_path,
+    ...(node_level != null ? { node_level: String(node_level) } : {}),
+  })
+
+export const getContract = (project_path: string, node_id: string) =>
+  get<import('../types').Contract>(`${BASE}/contracts/${node_id}`, { project_path })
+
+export const declareContract = (project_path: string, node_id: string, data: Partial<import('../types').Contract>) =>
+  post<import('../types').Contract>('/contracts', { project_path, node_id, ...data })
+
+export const checkContractBreak = (
+  project_path: string,
+  node_id: string,
+  operation_name: string,
+  new_input_type = '',
+  new_output_type = '',
+) =>
+  get<{ breaking: boolean; reason: string; callers: unknown[] }>(`${BASE}/contracts/${node_id}/check-break`, {
+    project_path, operation_name, new_input_type, new_output_type,
+  })
+
+// ─── Dependency annotation ────────────────────────────────────────────────────
+
+export const annotateDependency = (
+  project_path: string,
+  dep_id: string,
+  data: Partial<import('../types').Dependency>,
+) =>
+  patch<import('../types').Dependency>(`${BASE}/dependencies/${dep_id}/annotate`, {}, {
+    project_path, ...data,
+  })
+
+// ─── Public API management ────────────────────────────────────────────────────
+
+export const promoteToContract = (project_path: string, component_id: string, symbol_names: string[]) =>
+  post<import('../types').Component>(`/components/${component_id}/promote`, { project_path, symbol_names })
+
+// ─── File remapping ───────────────────────────────────────────────────────────
+
+export const remapFiles = (project_path: string, file_paths: string[], target_component_id: string) =>
+  post<{ remapped: string[]; not_found: string[]; target: string }>('/mappings/remap', {
+    project_path, file_paths, target_component_id,
+  })
+
+// ─── Migration ────────────────────────────────────────────────────────────────
+
+export const migrateMultilevel = (project_path: string) =>
+  post<{
+    ok: boolean
+    created_nodes: string[]
+    updated_nodes: string[]
+    annotated_edges: string[]
+    contracts_declared: string[]
+    summary: string
+  }>('/migrate/multilevel', { project_path })
