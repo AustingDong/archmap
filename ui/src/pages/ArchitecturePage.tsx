@@ -15,7 +15,7 @@ import {
   Plus, Trash2, Edit2, X, Check,
   ChevronRight, ChevronDown, Layers, GitBranch, Tag, Info,
   Monitor, Server, Database, Cloud, Share2, FlaskConical, Box,
-  Activity, Zap, AlertTriangle, FileCode, Cpu, RefreshCw, FolderPlus, Link, Search, Map,
+  Activity, Zap, AlertTriangle, FileCode, Cpu, RefreshCw, FolderPlus, Link, Heart,
   type LucideIcon,
 } from 'lucide-react'
 import { useStore } from '../store'
@@ -26,13 +26,13 @@ import {
   getComponentMetrics, getComponentImpact,
   getFileContent, getFileSymbol,
   mapFile, unmapFile, annotateFile, syncFileSymbols,
-  describeArchitecture, findRelated, tracePath,
-  getContract, migrateMultilevel, getWorkContext, getChangeSurface, resetGraph,
+  getContract, migrateMultilevel, resetGraph,
+  getCycles, getValidate, getCodeQuality, getCompleteness,
 } from '../api/archMapApi'
 import type {
   Component, Dependency, FileMapping, Layer,
   ComponentMetrics, ComponentImpact, FileContent, SymbolExtract,
-  RelatedSearchResult, PathTrace, Contract, WorkContext, NodeLevel,
+  Contract, NodeLevel,
 } from '../types'
 import { EDGE_TYPE_COLOR, LEVEL_LABELS } from '../types'
 
@@ -239,12 +239,37 @@ function ComponentNode({ data }: { data: any }) {
   const hasChildren: boolean = data.hasChildren ?? false
   const childCount: number = data.childCount ?? 0
   const loading: boolean = data.loading ?? false
+  // Health badge data (injected from parent)
+  const qualityScore: number | undefined = data.qualityScore
+  const inCycle: boolean = data.inCycle ?? false
+  const couplingCount: number = data.couplingCount ?? 0
+  const showHealthMode: boolean = data.showHealthMode ?? false
+  const completenessScore: number | undefined = data.completenessScore
+  const showCompletenessMode: boolean = data.showCompletenessMode ?? false
+
+  // Completeness-mode background: red/yellow/green based on score
+  const completenessBg = showCompletenessMode && completenessScore != null
+    ? (completenessScore >= 80 ? 'linear-gradient(145deg, rgba(10,40,25,0.95) 0%, rgba(8,28,18,0.97) 100%)'
+      : completenessScore >= 60 ? 'linear-gradient(145deg, rgba(50,38,8,0.95) 0%, rgba(35,26,5,0.97) 100%)'
+      : 'linear-gradient(145deg, rgba(60,15,15,0.95) 0%, rgba(40,10,10,0.97) 100%)')
+    : null
+
+  // Health-mode background: red/yellow/green based on available signals
+  const healthBg = showHealthMode
+    ? (inCycle ? 'linear-gradient(145deg, rgba(60,15,15,0.95) 0%, rgba(40,10,10,0.97) 100%)'
+      : couplingCount > 4 ? 'linear-gradient(145deg, rgba(50,30,10,0.95) 0%, rgba(35,20,5,0.97) 100%)'
+      : qualityScore != null && qualityScore < 60 ? 'linear-gradient(145deg, rgba(55,15,15,0.95) 0%, rgba(38,10,10,0.97) 100%)'
+      : qualityScore != null && qualityScore >= 80 ? 'linear-gradient(145deg, rgba(10,40,25,0.95) 0%, rgba(8,28,18,0.97) 100%)'
+      : 'linear-gradient(145deg, rgba(20,30,50,0.92) 0%, rgba(10,16,30,0.95) 100%)')
+    : null
+
+  const nodeBg = completenessBg ?? healthBg ?? 'linear-gradient(145deg, rgba(20,30,50,0.92) 0%, rgba(10,16,30,0.95) 100%)'
 
   return (
     <div
       style={{
         position: 'relative',
-        background: 'linear-gradient(145deg, rgba(20,30,50,0.92) 0%, rgba(10,16,30,0.95) 100%)',
+        background: nodeBg,
         backdropFilter: 'blur(16px)',
         WebkitBackdropFilter: 'blur(16px)',
         border: `1px solid ${isSelected ? c + 'cc' : 'rgba(255,255,255,0.08)'}`,
@@ -373,6 +398,53 @@ function ComponentNode({ data }: { data: any }) {
           )}
         </div>
       </div>
+
+      {/* Completeness badge — top-left overlay, only in completeness mode */}
+      {showCompletenessMode && completenessScore != null && (
+        <div style={{
+          position: 'absolute', top: 6, left: 6,
+          display: 'flex', alignItems: 'center', pointerEvents: 'none',
+        }}>
+          <span style={{
+            fontSize: 8, padding: '1px 4px', borderRadius: 3, fontWeight: 700,
+            background: completenessScore >= 80 ? 'rgba(52,211,153,0.15)' : completenessScore >= 60 ? 'rgba(245,158,11,0.15)' : 'rgba(248,113,113,0.15)',
+            color: completenessScore >= 80 ? '#34d399' : completenessScore >= 60 ? '#f59e0b' : '#f87171',
+            border: `1px solid ${completenessScore >= 80 ? 'rgba(52,211,153,0.3)' : completenessScore >= 60 ? 'rgba(245,158,11,0.3)' : 'rgba(248,113,113,0.3)'}`,
+          }} title={`Knowledge completeness: ${completenessScore}%`}>{completenessScore}%</span>
+        </div>
+      )}
+
+      {/* Health badges — top-right overlay */}
+      {(inCycle || couplingCount > 0 || qualityScore != null) && (
+        <div style={{
+          position: 'absolute', top: 6, right: 6,
+          display: 'flex', gap: 3, alignItems: 'center', pointerEvents: 'none',
+        }}>
+          {inCycle && (
+            <span style={{
+              fontSize: 8, padding: '1px 4px', borderRadius: 3, fontWeight: 700,
+              background: 'rgba(248,113,113,0.2)', color: '#fca5a5',
+              border: '1px solid rgba(248,113,113,0.35)',
+            }} title="In a dependency cycle">⟳</span>
+          )}
+          {couplingCount > 0 && (
+            <span style={{
+              fontSize: 8, padding: '1px 4px', borderRadius: 3, fontWeight: 700,
+              background: couplingCount > 4 ? 'rgba(251,146,60,0.2)' : 'rgba(148,163,184,0.12)',
+              color: couplingCount > 4 ? '#fdba74' : '#94a3b8',
+              border: `1px solid ${couplingCount > 4 ? 'rgba(251,146,60,0.35)' : 'rgba(148,163,184,0.2)'}`,
+            }} title={`${couplingCount} upstream dependents`}>↑{couplingCount}</span>
+          )}
+          {qualityScore != null && (
+            <span style={{
+              fontSize: 8, padding: '1px 4px', borderRadius: 3, fontWeight: 700,
+              background: qualityScore >= 80 ? 'rgba(52,211,153,0.15)' : qualityScore >= 60 ? 'rgba(245,158,11,0.15)' : 'rgba(248,113,113,0.15)',
+              color: qualityScore >= 80 ? '#34d399' : qualityScore >= 60 ? '#f59e0b' : '#f87171',
+              border: `1px solid ${qualityScore >= 80 ? 'rgba(52,211,153,0.3)' : qualityScore >= 60 ? 'rgba(245,158,11,0.3)' : 'rgba(248,113,113,0.3)'}`,
+            }} title={`Quality score: ${qualityScore}/100`}>{qualityScore}</span>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -610,149 +682,74 @@ function usePanelResize(defaultWidth: number, min = 220, max = 700) {
   return [width, handle] as const
 }
 
-// ── Markdown renderer ──────────────────────────────────────────────────────────
-// Lightweight line-by-line renderer: h1/h2/h3, bold, inline code, bullets, hr.
+// ── Health Panel ───────────────────────────────────────────────────────────────
+// Shows project health: dependency cycles, rule violations, and hot zones ranked
+// by "messiness" (coupling + cycles + quality). Helps users prioritize refactoring.
 
-function renderInline(text: string): React.ReactNode[] {
-  // Parse **bold** and `code` inline spans
-  const parts: React.ReactNode[] = []
-  const rx = /(\*\*(.+?)\*\*|`([^`]+)`)/g
-  let last = 0, m: RegExpExecArray | null
-  while ((m = rx.exec(text)) !== null) {
-    if (m.index > last) parts.push(text.slice(last, m.index))
-    if (m[2] != null) parts.push(<strong key={m.index} style={{ color: '#e2e8f0', fontWeight: 700 }}>{m[2]}</strong>)
-    else parts.push(<code key={m.index} style={{ fontFamily: 'monospace', fontSize: '0.9em', padding: '1px 5px', borderRadius: 4, background: 'rgba(96,165,250,0.12)', color: '#93c5fd' }}>{m[3]}</code>)
-    last = m.index + m[0].length
-  }
-  if (last < text.length) parts.push(text.slice(last))
-  return parts
+interface HealthData {
+  cycles: Array<{
+    component_id: string
+    component_name: string
+    layer: string
+    cycles_with: Array<{ component_id: string; component_name: string; layer: string }>
+  }>
+  violations: Array<{
+    rule_id: string
+    rule_type: string
+    message: string
+    from_component: string
+    from_name: string
+    to_component: string
+    to_name: string
+  }>
+  couplingMap: Record<string, number>  // component_id → upstream count
 }
 
-function MarkdownView({ text }: { text: string }) {
-  const lines = text.split('\n')
-  const nodes: React.ReactNode[] = []
-  let bulletBuf: string[] = []
-
-  const flushBullets = () => {
-    if (!bulletBuf.length) return
-    nodes.push(
-      <ul key={`ul-${nodes.length}`} style={{ margin: '4px 0 10px 0', paddingLeft: 18, listStyle: 'none' }}>
-        {bulletBuf.map((b, i) => (
-          <li key={i} style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.65, marginBottom: 2, display: 'flex', gap: 7, alignItems: 'flex-start' }}>
-            <span style={{ color: '#60a5fa', marginTop: 1, flexShrink: 0 }}>›</span>
-            <span>{renderInline(b)}</span>
-          </li>
-        ))}
-      </ul>
-    )
-    bulletBuf = []
-  }
-
-  lines.forEach((raw, idx) => {
-    const line = raw.trimEnd()
-
-    if (line.startsWith('# ')) {
-      flushBullets()
-      nodes.push(
-        <div key={idx} style={{
-          fontSize: 15, fontWeight: 800, color: '#f1f5f9', marginTop: nodes.length ? 18 : 0, marginBottom: 6,
-          paddingBottom: 6, borderBottom: '1px solid rgba(96,165,250,0.2)',
-          letterSpacing: '-0.01em',
-        }}>{renderInline(line.slice(2))}</div>
-      )
-    } else if (line.startsWith('## ')) {
-      flushBullets()
-      nodes.push(
-        <div key={idx} style={{
-          fontSize: 12, fontWeight: 700, color: '#94c8ff', marginTop: 16, marginBottom: 5,
-          display: 'flex', alignItems: 'center', gap: 7,
-        }}>
-          <span style={{ display: 'inline-block', width: 3, height: 12, borderRadius: 2, background: '#60a5fa', flexShrink: 0 }} />
-          {renderInline(line.slice(3))}
-        </div>
-      )
-    } else if (line.startsWith('### ')) {
-      flushBullets()
-      nodes.push(
-        <div key={idx} style={{ fontSize: 10.5, fontWeight: 700, color: '#7dd3fc', marginTop: 10, marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
-          {renderInline(line.slice(4))}
-        </div>
-      )
-    } else if (/^-{3,}$/.test(line)) {
-      flushBullets()
-      nodes.push(<hr key={idx} style={{ border: 'none', borderTop: '1px solid rgba(255,255,255,0.07)', margin: '10px 0' }} />)
-    } else if (line.startsWith('- ') || line.startsWith('* ')) {
-      bulletBuf.push(line.slice(2))
-    } else if (line.trim() === '') {
-      flushBullets()
-      nodes.push(<div key={idx} style={{ height: 4 }} />)
-    } else {
-      flushBullets()
-      nodes.push(
-        <p key={idx} style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.75, margin: '0 0 4px 0' }}>
-          {renderInline(line)}
-        </p>
-      )
-    }
-  })
-  flushBullets()
-
-  return <div>{nodes}</div>
-}
-
-// ── Intelligence Panel ─────────────────────────────────────────────────────────
-// Searchable graph explorer for humans and agents. Provides find_related,
-// describe_architecture, and trace_path without leaving the graph view.
-
-function IntelligencePanel({ projectPath, components, onClose }: {
-  projectPath: string
+function HealthPanel({
+  components,
+  healthData,
+  qualityScores,
+  completenessMap,
+  onClose,
+  onSelectComponent,
+}: {
   components: Component[]
+  healthData: HealthData | null
+  qualityScores: Record<string, number>
+  completenessMap: Record<string, number>
   onClose: () => void
+  onSelectComponent: (id: string) => void
 }) {
-  const [panelWidth, resizeHandle] = usePanelResize(380)
-  const [tab, setTab] = React.useState<'search' | 'describe' | 'trace'>('search')
-  const [query, setQuery] = React.useState('')
-  const [searchResult, setSearchResult] = React.useState<RelatedSearchResult | null>(null)
-  const [searching, setSearching] = React.useState(false)
-  const [descText, setDescText] = React.useState<string | null>(null)
-  const [descLoading, setDescLoading] = React.useState(false)
-  const [traceFrom, setTraceFrom] = React.useState('')
-  const [traceTo, setTraceTo] = React.useState('')
-  const [traceResult, setTraceResult] = React.useState<PathTrace | null>(null)
-  const [tracing, setTracing] = React.useState(false)
+  const [panelWidth, resizeHandle] = usePanelResize(360)
 
-  const handleSearch = async () => {
-    if (!query.trim()) return
-    setSearching(true)
-    try { setSearchResult(await findRelated(projectPath, query)) }
-    catch { /* silent */ }
-    finally { setSearching(false) }
+  if (!healthData) {
+    return (
+      <div style={{ width: 360, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(8,13,24,0.98)', borderLeft: '1px solid rgba(255,255,255,0.07)' }}>
+        <span className="spinner spinner-lg" />
+      </div>
+    )
   }
 
-  const handleDescribe = async () => {
-    if (descText) return  // already loaded
-    setDescLoading(true)
-    try { const r = await describeArchitecture(projectPath); setDescText(r.text) }
-    catch { /* silent */ }
-    finally { setDescLoading(false) }
+  const cycleIds = new Set(healthData.cycles.flatMap(c => [c.component_id, ...c.cycles_with.map(x => x.component_id)]))
+  const violatingIds = new Set(healthData.violations.flatMap(v => [v.from_component, v.to_component]))
+
+  // Composite messiness score for ranking (not shown to user)
+  const messiness = (comp: Component): number => {
+    const coupling = healthData.couplingMap[comp.id] ?? 0
+    const couplingPenalty = coupling > 4 ? (coupling - 4) * 8 : coupling * 2
+    const cyclePenalty = cycleIds.has(comp.id) ? 30 : 0
+    const violationPenalty = violatingIds.has(comp.id) ? 20 : 0
+    const quality = qualityScores[comp.id]
+    const qualityPenalty = quality != null ? Math.max(0, (80 - quality) * 0.5) : 0
+    return couplingPenalty + cyclePenalty + violationPenalty + qualityPenalty
   }
 
-  React.useEffect(() => { if (tab === 'describe') handleDescribe() }, [tab])
+  const rankedComponents = [...components]
+    .filter(c => messiness(c) > 0)
+    .sort((a, b) => messiness(b) - messiness(a))
 
-  const handleTrace = async () => {
-    if (!traceFrom || !traceTo) return
-    setTracing(true)
-    try { setTraceResult(await tracePath(projectPath, traceFrom, traceTo)) }
-    catch { /* silent */ }
-    finally { setTracing(false) }
-  }
-
-  const TAB_STYLE = (active: boolean) => ({
-    flex: 1, padding: '6px 0', fontSize: 10.5, fontWeight: active ? 700 : 500,
-    background: active ? 'rgba(96,165,250,0.12)' : 'none',
-    border: 'none', borderBottom: `2px solid ${active ? '#60a5fa' : 'transparent'}`,
-    cursor: 'pointer', color: active ? '#60a5fa' : 'var(--text-muted)', transition: 'all 0.15s',
-  })
+  const totalIssues = healthData.cycles.length + healthData.violations.length
+  const healthyCount = components.length - rankedComponents.length
 
   return (
     <div style={{
@@ -762,195 +759,142 @@ function IntelligencePanel({ projectPath, components, onClose }: {
       backdropFilter: 'blur(20px)',
     }}>
       {resizeHandle}
-      <div style={{ height: 2, background: 'linear-gradient(90deg, #60a5facc, #34d39944)' }} />
+      <div style={{ height: 2, background: 'linear-gradient(90deg, #f87171cc, #f59e0b44)' }} />
 
       {/* Header */}
       <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.07)', display: 'flex', alignItems: 'center', gap: 9 }}>
-        <Map size={14} color="#60a5fa" style={{ flexShrink: 0 }} />
+        <Heart size={14} color="#f87171" style={{ flexShrink: 0 }} />
         <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 700, fontSize: 13 }}>Graph Intelligence</div>
-          <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1 }}>Explore the architecture without reading source files</div>
+          <div style={{ fontWeight: 700, fontSize: 13 }}>Project Health</div>
+          <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1 }}>
+            {components.length} component{components.length !== 1 ? 's' : ''} — {healthyCount} healthy, {rankedComponents.length} with issues
+          </div>
         </div>
         <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 4 }}><X size={13} /></button>
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-        <button style={TAB_STYLE(tab === 'search')} onClick={() => setTab('search')}>Search</button>
-        <button style={TAB_STYLE(tab === 'describe')} onClick={() => setTab('describe')}>Overview</button>
-        <button style={TAB_STYLE(tab === 'trace')} onClick={() => setTab('trace')}>Trace Path</button>
-      </div>
-
       <div style={{ flex: 1, overflowY: 'auto' }}>
 
-        {/* ── Search tab ── */}
-        {tab === 'search' && (
-          <div style={{ padding: 16 }}>
-            <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-              <input
-                type="text" placeholder="e.g. authentication, database, validate..."
-                value={query} onChange={e => setQuery(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleSearch()}
-                style={{ flex: 1, fontSize: 11.5 }} autoFocus
-              />
-              <button className="btn btn-primary btn-sm" onClick={handleSearch} disabled={searching || !query.trim()}>
-                {searching ? <span className="spinner" style={{ width: 10, height: 10 }} /> : <Search size={11} />}
-              </button>
+        {/* Cycles */}
+        {healthData.cycles.length > 0 && (
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, padding: '5px 9px', borderRadius: 7, background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.25)' }}>
+              <AlertTriangle size={11} color="#f87171" />
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: '#f87171' }}>{healthData.cycles.length} circular dependenc{healthData.cycles.length !== 1 ? 'ies' : 'y'}</span>
             </div>
-
-            {searchResult && (
-              <>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 10, padding: '5px 9px', background: 'rgba(96,165,250,0.06)', borderRadius: 7, border: '1px solid rgba(96,165,250,0.12)' }}>
-                  {searchResult.summary}
-                </div>
-
-                {searchResult.components.length > 0 && (
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Components</div>
-                    {searchResult.components.map(c => (
-                      <div key={c.id} style={{ marginBottom: 5, padding: '6px 9px', background: 'rgba(255,255,255,0.03)', borderRadius: 7, border: '1px solid rgba(255,255,255,0.07)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-                          <div style={{ width: 7, height: 7, borderRadius: '50%', background: LAYER_COLOR[c.layer] ?? '#94a3b8', flexShrink: 0 }} />
-                          <span style={{ fontSize: 11.5, fontWeight: 700 }}>{c.name}</span>
-                          <span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 'auto' }}>{c.layer}</span>
-                        </div>
-                        {c.description && <p style={{ fontSize: 10.5, color: 'var(--text-muted)', lineHeight: 1.5, margin: 0 }}>{c.description}</p>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {searchResult.files.length > 0 && (
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Files</div>
-                    {searchResult.files.slice(0, 8).map(f => (
-                      <div key={f.file_path} style={{ marginBottom: 4, padding: '5px 9px', background: 'rgba(255,255,255,0.02)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.06)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                          <FileCode size={9} color="var(--text-muted)" style={{ flexShrink: 0 }} />
-                          <span style={{ fontSize: 10, fontFamily: 'monospace', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.file_path}</span>
-                          {f.language && <span style={{ fontSize: 8, color: 'var(--text-muted)' }}>{f.language}</span>}
-                        </div>
-                        {f.component_name && <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1, paddingLeft: 14 }}>→ {f.component_name}</div>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {searchResult.symbols.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Symbols</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      {searchResult.symbols.slice(0, 20).map((s, i) => {
-                        const isCls = !s.symbol.endsWith('()')
-                        return (
-                          <div key={i} style={{ padding: '3px 8px', borderRadius: 5, fontSize: 9.5, fontFamily: 'monospace', background: isCls ? 'rgba(168,85,247,0.1)' : 'rgba(96,165,250,0.08)', color: isCls ? '#a855f7' : '#60a5fa', border: `1px solid ${isCls ? 'rgba(168,85,247,0.2)' : 'rgba(96,165,250,0.15)'}` }} title={`${s.file_path} → ${s.component_name}`}>
-                            {s.symbol}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-
-            {!searchResult && (
-              <p style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.7 }}>
-                Search across component names, descriptions, file paths, and symbol names.<br />
-                <span style={{ opacity: 0.6 }}>Try: "auth", "api", "store", "validate"</span>
-              </p>
-            )}
+            {healthData.cycles.map((cycle, i) => (
+              <div key={i} style={{ marginBottom: 5, fontSize: 10.5, display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                {cycle.cycles_with.map((partner, j) => (
+                  <React.Fragment key={partner.component_id}>
+                    <button
+                      onClick={() => onSelectComponent(cycle.component_id)}
+                      style={{ border: 'none', cursor: 'pointer', padding: '1px 6px', borderRadius: 4, background: 'rgba(248,113,113,0.08)', color: '#fca5a5', fontSize: 10.5, fontWeight: 600 }}
+                    >{cycle.component_name}</button>
+                    <span style={{ color: 'var(--text-muted)', fontSize: 9 }}>⟳</span>
+                    <button
+                      onClick={() => onSelectComponent(partner.component_id)}
+                      style={{ border: 'none', cursor: 'pointer', padding: '1px 6px', borderRadius: 4, background: 'rgba(248,113,113,0.08)', color: '#fca5a5', fontSize: 10.5, fontWeight: 600 }}
+                    >{partner.component_name}</button>
+                    {j < cycle.cycles_with.length - 1 && <span style={{ color: 'var(--text-muted)' }}>,</span>}
+                  </React.Fragment>
+                ))}
+              </div>
+            ))}
           </div>
         )}
 
-        {/* ── Describe tab ── */}
-        {tab === 'describe' && (
-          <div style={{ padding: 16 }}>
-            {descLoading && <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}><span className="spinner spinner-lg" /></div>}
-            {descText && <MarkdownView text={descText} />}
-            {descText && (
-              <button
-                className="btn btn-ghost btn-sm"
-                style={{ marginTop: 12, width: '100%', justifyContent: 'center' }}
-                onClick={() => { navigator.clipboard.writeText(descText) }}
-              >
-                Copy for Agent
-              </button>
-            )}
+        {/* Rule violations */}
+        {healthData.violations.length > 0 && (
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, padding: '5px 9px', borderRadius: 7, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)' }}>
+              <AlertTriangle size={11} color="#f59e0b" />
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: '#f59e0b' }}>{healthData.violations.length} rule violation{healthData.violations.length !== 1 ? 's' : ''}</span>
+            </div>
+            {healthData.violations.slice(0, 8).map((v, i) => (
+              <div key={i} style={{ marginBottom: 4, padding: '5px 9px', borderRadius: 6, background: 'rgba(245,158,11,0.05)', border: '1px solid rgba(245,158,11,0.12)', fontSize: 10 }}>
+                <span style={{ color: '#fcd34d', fontWeight: 600 }}>{v.from_name}</span>
+                <span style={{ color: 'var(--text-muted)', margin: '0 4px' }}>→</span>
+                <span style={{ color: '#fcd34d', fontWeight: 600 }}>{v.to_name}</span>
+                {v.message && <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1 }}>{v.message}</div>}
+              </div>
+            ))}
           </div>
         )}
 
-        {/* ── Trace tab ── */}
-        {tab === 'trace' && (
-          <div style={{ padding: 16 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
-              <div>
-                <label style={{ fontSize: 9.5, color: 'var(--text-muted)', marginBottom: 3, display: 'block' }}>From component</label>
-                <select value={traceFrom} onChange={e => setTraceFrom(e.target.value)} style={{ width: '100%', fontSize: 11 }}>
-                  <option value="">— select —</option>
-                  {components.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={{ fontSize: 9.5, color: 'var(--text-muted)', marginBottom: 3, display: 'block' }}>To component</label>
-                <select value={traceTo} onChange={e => setTraceTo(e.target.value)} style={{ width: '100%', fontSize: 11 }}>
-                  <option value="">— select —</option>
-                  {components.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-              <button className="btn btn-primary btn-sm" onClick={handleTrace} disabled={tracing || !traceFrom || !traceTo}>
-                {tracing ? <span className="spinner" style={{ width: 10, height: 10 }} /> : 'Trace Path'}
-              </button>
-            </div>
+        {/* Hot zones */}
+        <div style={{ padding: '12px 16px' }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+            Hot Zones {rankedComponents.length > 0 ? `(${rankedComponents.length})` : ''}
+          </div>
 
-            {traceResult && (
-              traceResult.found ? (
-                <div>
-                  <div style={{ padding: '7px 10px', marginBottom: 10, borderRadius: 8, background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.2)', fontSize: 10.5, color: '#34d399', fontWeight: 600 }}>
-                    Path found — {traceResult.length} hop{traceResult.length !== 1 ? 's' : ''}
+          {rankedComponents.length === 0 ? (
+            <div style={{ padding: '16px 0', textAlign: 'center', color: '#34d399', fontSize: 11 }}>
+              <span style={{ display: 'block', fontSize: 18, marginBottom: 4 }}>✓</span>
+              All components look healthy
+            </div>
+          ) : (
+            rankedComponents.map(comp => {
+              const coupling = healthData.couplingMap[comp.id] ?? 0
+              const inCycle = cycleIds.has(comp.id)
+              const hasViolation = violatingIds.has(comp.id)
+              const quality = qualityScores[comp.id]
+              const c = LAYER_COLOR[comp.layer] ?? '#94a3b8'
+
+              return (
+                <div
+                  key={comp.id}
+                  onClick={() => onSelectComponent(comp.id)}
+                  style={{
+                    marginBottom: 6, padding: '8px 10px', borderRadius: 8, cursor: 'pointer',
+                    background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)',
+                    transition: 'background 0.15s, border-color 0.15s',
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)'; (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.13)' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.03)'; (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.07)' }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 5 }}>
+                    <div style={{ width: 7, height: 7, borderRadius: '50%', background: c, flexShrink: 0 }} />
+                    <span style={{ fontSize: 11.5, fontWeight: 700, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{comp.name}</span>
+                    <span style={{ fontSize: 8.5, padding: '1px 5px', borderRadius: 4, background: c + '18', color: c, flexShrink: 0 }}>{comp.layer}</span>
                   </div>
-                  <div style={{ fontSize: 10, fontFamily: 'monospace', color: 'var(--text-muted)', marginBottom: 12, padding: '6px 9px', background: 'rgba(255,255,255,0.03)', borderRadius: 6 }}>
-                    {traceResult.text}
-                  </div>
-                  {traceResult.path.map((node, i) => (
-                    <div key={node.component_id} style={{ marginBottom: 6 }}>
-                      {i > 0 && node.via_dependency && (
-                        <div style={{ fontSize: 9, color: 'var(--text-muted)', paddingLeft: 12, marginBottom: 2 }}>
-                          ↓ {node.via_dependency.label} ({node.via_dependency.confidence})
+
+                  {/* Quality bar + completeness bar + coupling */}
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 5, alignItems: 'center' }}>
+                    {quality != null && (
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 8, color: 'var(--text-muted)', marginBottom: 2 }}>quality</div>
+                        <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${quality}%`, borderRadius: 2, background: quality >= 80 ? '#34d399' : quality >= 60 ? '#f59e0b' : '#f87171', transition: 'width 0.3s' }} />
                         </div>
-                      )}
-                      <div style={{ padding: '6px 9px', borderRadius: 7, background: 'rgba(255,255,255,0.03)', border: `1px solid ${LAYER_COLOR[node.layer] ?? '#94a3b8'}22` }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <div style={{ width: 6, height: 6, borderRadius: '50%', background: LAYER_COLOR[node.layer] ?? '#94a3b8', flexShrink: 0 }} />
-                          <span style={{ fontSize: 11.5, fontWeight: 700 }}>{node.component_name}</span>
-                          <span style={{ fontSize: 9, color: 'var(--text-muted)', marginLeft: 'auto' }}>{node.layer}</span>
-                        </div>
-                        {node.files.length > 0 && (
-                          <div style={{ marginTop: 4, paddingLeft: 12 }}>
-                            {node.files.map(f => (
-                              <span key={f} style={{ fontSize: 8.5, fontFamily: 'monospace', color: 'var(--text-muted)', display: 'block' }}>{f}</span>
-                            ))}
-                          </div>
-                        )}
                       </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ padding: '7px 10px', borderRadius: 8, background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', fontSize: 10.5, color: '#f87171' }}>
-                  {traceResult.text ?? traceResult.error ?? 'No path found'}
+                    )}
+                    {completenessMap[comp.id] != null && (
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 8, color: 'var(--text-muted)', marginBottom: 2 }}>complete</div>
+                        <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+                          {(() => { const s = completenessMap[comp.id]; return <div style={{ height: '100%', width: `${s}%`, borderRadius: 2, background: s >= 80 ? '#34d399' : s >= 60 ? '#f59e0b' : '#f87171', transition: 'width 0.3s' }} /> })()}
+                        </div>
+                      </div>
+                    )}
+                    {coupling > 0 && (
+                      <div style={{ flexShrink: 0, fontSize: 9, color: coupling > 4 ? '#fb923c' : 'var(--text-muted)', fontWeight: coupling > 4 ? 700 : 400 }}>
+                        ↑{coupling}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Tags */}
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    {inCycle && <span style={{ fontSize: 8.5, padding: '1px 5px', borderRadius: 3, background: 'rgba(248,113,113,0.1)', color: '#fca5a5', border: '1px solid rgba(248,113,113,0.2)' }}>⟳ cycle</span>}
+                    {coupling > 4 && <span style={{ fontSize: 8.5, padding: '1px 5px', borderRadius: 3, background: 'rgba(251,146,60,0.1)', color: '#fdba74', border: '1px solid rgba(251,146,60,0.2)' }}>↑{coupling} deps</span>}
+                    {hasViolation && <span style={{ fontSize: 8.5, padding: '1px 5px', borderRadius: 3, background: 'rgba(245,158,11,0.1)', color: '#fcd34d', border: '1px solid rgba(245,158,11,0.2)' }}>rule violation</span>}
+                    {quality != null && quality < 60 && <span style={{ fontSize: 8.5, padding: '1px 5px', borderRadius: 3, background: 'rgba(248,113,113,0.1)', color: '#fca5a5', border: '1px solid rgba(248,113,113,0.2)' }}>quality {quality}</span>}
+                  </div>
                 </div>
               )
-            )}
-
-            {!traceResult && (
-              <p style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.7 }}>
-                Find the shortest dependency path between two components.<br />
-                <span style={{ opacity: 0.6 }}>Useful for understanding data flow and blast radius.</span>
-              </p>
-            )}
-          </div>
-        )}
+            })
+          )}
+        </div>
       </div>
     </div>
   )
@@ -989,8 +933,13 @@ export default function ArchitecturePage() {
   const [loading, setLoading] = useState(false)
   const [inferring, setInferring] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
-  const [showIntel, setShowIntel] = useState(false)
+  const [showHealth, setShowHealth] = useState(false)
+  const [showHealthMode, setShowHealthMode] = useState(false)
+  const [showCompletenessMode, setShowCompletenessMode] = useState(false)
   const [showCycles, setShowCycles] = useState(false)
+  const [healthData, setHealthData] = useState<HealthData | null>(null)
+  const [qualityScores, setQualityScores] = useState<Record<string, number>>({})
+  const [completenessMap, setCompletenessMap] = useState<Record<string, number>>({})
   const [expandedComponents, setExpandedComponents] = useState<Set<string>>(new Set())
   const [loadingComponents, setLoadingComponents] = useState<Set<string>>(new Set())
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set())
@@ -1044,16 +993,48 @@ export default function ArchitecturePage() {
   ) => {
     const scopeId = scope[scope.length - 1]?.id ?? null
     let visibleComps: Component[]
+    let visibleDeps: Dependency[]
+
     if (scopeId === null) {
-      // Root: L1 + L2. Fallback to all if graph has no hierarchy.
-      visibleComps = allComponents.filter(c => (c.level ?? 4) <= 2)
+      // Root: show only L2 domain nodes. L1 is the implicit system boundary.
+      visibleComps = allComponents.filter(c => (c.level ?? 4) === 2)
+      if (visibleComps.length === 0) visibleComps = allComponents.filter(c => (c.level ?? 4) <= 2)
       if (visibleComps.length === 0) visibleComps = allComponents
+
+      const visibleSet = new Set(visibleComps.map(c => c.id))
+      const byId = Object.fromEntries(allComponents.map(c => [c.id, c]))
+
+      // Find the L2 ancestor of any component (walks parent_id chain up to level 2).
+      const l2AncestorOf = (id: string): string | null => {
+        let cur = byId[id]
+        while (cur) {
+          if ((cur.level ?? 4) === 2) return cur.id
+          if (!cur.parent_id) return null
+          cur = byId[cur.parent_id]
+        }
+        return null
+      }
+
+      // Roll up all deps to their L2 ancestors so domain-level connections are visible.
+      const rollupEdges = new Map<string, Dependency>()
+      for (const d of allDeps) {
+        const fromL2 = visibleSet.has(d.from_component) ? d.from_component : l2AncestorOf(d.from_component)
+        const toL2   = visibleSet.has(d.to_component)   ? d.to_component   : l2AncestorOf(d.to_component)
+        if (fromL2 && toL2 && fromL2 !== toL2) {
+          const key = `${fromL2}→${toL2}`
+          if (!rollupEdges.has(key)) {
+            rollupEdges.set(key, { ...d, id: `rollup_${key}`, from_component: fromL2, to_component: toL2, confidence: 'auto' as const })
+          }
+        }
+      }
+      visibleDeps = [...rollupEdges.values()]
     } else {
       const childIds = new Set(cMap[scopeId] ?? [])
       visibleComps = allComponents.filter(c => childIds.has(c.id))
+      const visibleSet = new Set(visibleComps.map(c => c.id))
+      visibleDeps = allDeps.filter(d => visibleSet.has(d.from_component) && visibleSet.has(d.to_component))
     }
-    const visibleSet = new Set(visibleComps.map(c => c.id))
-    const visibleDeps = allDeps.filter(d => visibleSet.has(d.from_component) && visibleSet.has(d.to_component))
+
     const laid = layoutWithDagre(buildNodes(visibleComps, cMap), buildEdges(visibleDeps))
     const withPositions = laid.map(n => savedPositions[n.id] ? { ...n, position: savedPositions[n.id] } : n)
     setNodes(withPositions)
@@ -1081,11 +1062,61 @@ export default function ArchitecturePage() {
       setExpandedComponents(new Set())
       setExpandedFiles(new Set())
       focusSavedPos.current = {}
+
+      // Compute coupling map from loaded deps (upstream count per component)
+      const couplingMap: Record<string, number> = {}
+      for (const d of arch.dependencies) {
+        couplingMap[d.to_component] = (couplingMap[d.to_component] ?? 0) + 1
+      }
+
+      // Fetch cycles, violations, and completeness in parallel (non-blocking, best-effort)
+      const [cyclesResult, validateResult, completenessResult] = await Promise.allSettled([
+        getCycles(projectPath),
+        getValidate(projectPath),
+        getCompleteness(projectPath),
+      ])
+      const cycles = cyclesResult.status === 'fulfilled' ? cyclesResult.value.cycles : []
+      const violations = validateResult.status === 'fulfilled' ? validateResult.value.violations : []
+      setHealthData({ cycles, violations, couplingMap })
+      if (completenessResult.status === 'fulfilled') {
+        const cMap: Record<string, number> = {}
+        for (const s of completenessResult.value) cMap[s.component_id] = s.score
+        setCompletenessMap(cMap)
+      }
     } catch (e: any) { toast('error', e.message) }
     finally { setLoading(false) }
   }, [projectPath, graphKey, buildScopedGraph])
 
   useEffect(() => { load() }, [load])
+
+  // Lazily fetch quality score when a component is selected (if not already cached)
+  useEffect(() => {
+    if (!selected || !projectPath || qualityScores[selected.id] !== undefined) return
+    getCodeQuality(projectPath, selected.id)
+      .then(r => setQualityScores(prev => ({ ...prev, [selected.id]: r.score })))
+      .catch(() => { /* silent — quality is optional */ })
+  }, [selected, projectPath])
+
+  // Merge health badges + completeness into node data when data or mode changes
+  useEffect(() => {
+    if (!healthData) return
+    const cycleIds = new Set(healthData.cycles.flatMap(c => [c.component_id, ...c.cycles_with.map(x => x.component_id)]))
+    setNodes(prev => prev.map(n => {
+      if (n.type !== 'component') return n
+      return {
+        ...n,
+        data: {
+          ...n.data,
+          inCycle: cycleIds.has(n.id),
+          couplingCount: healthData.couplingMap[n.id] ?? 0,
+          qualityScore: qualityScores[n.id],
+          showHealthMode,
+          completenessScore: completenessMap[n.id],
+          showCompletenessMode,
+        },
+      }
+    }))
+  }, [healthData, qualityScores, showHealthMode, completenessMap, showCompletenessMode])
 
   const toggleNode = useCallback(async (nodeId: string) => {
     // Collapse: remove file nodes + their symbol children
@@ -1663,11 +1694,27 @@ export default function ArchitecturePage() {
               <div style={{ width: 1, background: 'rgba(255,255,255,0.08)', margin: '0 2px' }} />
               <button
                 className="btn btn-ghost btn-sm"
-                onClick={() => setShowIntel(v => !v)}
-                title="Graph intelligence — search, overview, trace paths"
-                style={{ color: showIntel ? '#60a5fa' : undefined, background: showIntel ? 'rgba(96,165,250,0.1)' : undefined }}
+                onClick={() => setShowHealth(v => !v)}
+                title="Project health — cycles, violations, hot zones"
+                style={{ color: showHealth ? '#f87171' : undefined, background: showHealth ? 'rgba(248,113,113,0.1)' : undefined }}
               >
-                <Map size={12} /> Intelligence
+                <Heart size={12} /> Health
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowHealthMode(v => !v)}
+                title="Heat-map: color nodes by health state"
+                style={{ color: showHealthMode ? '#f59e0b' : undefined, background: showHealthMode ? 'rgba(245,158,11,0.1)' : undefined }}
+              >
+                <Activity size={12} /> Show Health
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setShowCompletenessMode(v => !v)}
+                title="Heat-map: color nodes by knowledge completeness score"
+                style={{ color: showCompletenessMode ? '#34d399' : undefined, background: showCompletenessMode ? 'rgba(52,211,153,0.1)' : undefined }}
+              >
+                <Cpu size={12} /> Completeness
               </button>
               <button
                 className="btn btn-ghost btn-sm"
@@ -1819,11 +1866,25 @@ export default function ArchitecturePage() {
           onClose={() => setSymbolPanel(null)}
         />
       )}
-      {showIntel && (
-        <IntelligencePanel
-          projectPath={projectPath}
+      {showHealth && (
+        <HealthPanel
           components={components}
-          onClose={() => setShowIntel(false)}
+          healthData={healthData}
+          qualityScores={qualityScores}
+          completenessMap={completenessMap}
+          onClose={() => setShowHealth(false)}
+          onSelectComponent={(id) => {
+            const comp = components.find(c => c.id === id)
+            if (comp) {
+              setSelected(comp)
+              setShowHealth(false)
+              // Center on the node
+              const node = nodes.find(n => n.id === id)
+              if (node && rfRef.current) {
+                rfRef.current.setCenter(node.position.x + NODE_W / 2, node.position.y + NODE_H / 2, { zoom: 1.2, duration: 500 })
+              }
+            }
+          }}
         />
       )}
 

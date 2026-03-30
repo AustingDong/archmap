@@ -56,10 +56,6 @@ def init_project(project_path: str, name: str | None = None) -> dict:
     return meta
 
 
-def get_project_meta(project_path: str) -> dict:
-    return load_meta(project_path)
-
-
 def project_status(project_path: str) -> dict:
     """Summary stats for a project."""
     from archmap.store import load_arch, load_mappings, load_plan

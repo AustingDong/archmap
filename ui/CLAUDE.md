@@ -83,16 +83,13 @@ snapshot_architecture(project_path="...", label="before-my-change")
 diff_architecture(project_path="...", snapshot_label="before-my-change")
 ```
 
-## Automatic vs manual
+## Sync is always explicit — nothing is automatic
 
-| What | Automatic | Manual |
-|---|---|---|
-| Symbol sync for existing files | ✓ File watcher (when UI is open) | `post_edit_sync` |
-| Symbol sync via MCP | ✗ | `post_edit_sync` — always call this |
-| New file mapping | ✗ Never automatic | `map_file` + `post_edit_sync` |
-| Dependency re-inference | ✗ | `post_edit_sync(reinfer_dependencies=True)` |
-| Architecture description | ✓ Always current | — |
+| What | How |
+|---|---|
+| Symbol sync | `post_edit_sync(file_paths=[...])` — required after every edit |
+| New file mapping | `post_edit_sync` returns `unmapped` list → call `map_file` for each |
+| Dependency re-inference | `post_edit_sync(reinfer_dependencies=True)` — when imports changed |
+| Architecture description | Always current |
 
-The file watcher auto-syncs symbols for the UI graph when you save files,
-but the MCP symbol index is only updated when you call `post_edit_sync`.
-Always call it after editing.
+Always call `post_edit_sync` after editing. There is no background sync.

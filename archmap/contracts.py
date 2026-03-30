@@ -93,50 +93,6 @@ def list_contracts(project_path: str, node_level: int | None = None) -> list[dic
     return result
 
 
-def patch_contract(
-    project_path: str,
-    node_id: str,
-    **kwargs,
-) -> dict:
-    """
-    Partial update to an existing contract — add/replace specific fields only.
-    Useful for incrementally building up a contract without re-declaring everything.
-    """
-    contracts = load_contracts(project_path)
-    if node_id not in contracts:
-        # Bootstrap empty contract first
-        arch = load_arch(project_path)
-        node_ids = {c["id"] for c in arch.get("components", [])}
-        if node_id not in node_ids:
-            raise NotFoundError(f"Node not found: {node_id!r}")
-        existing = {"node_id": node_id, "node_level": 4, "commands": [],
-                    "queries": [], "events_emitted": [], "events_consumed": [],
-                    "data_owned": [], "data_read": [], "api_spec_url": "", "sla": "",
-                    "declared_at": _now(), "declared_by": "user"}
-    else:
-        existing = dict(contracts[node_id])
-
-    list_fields = {"commands", "queries", "events_emitted", "events_consumed",
-                   "data_owned", "data_read"}
-    for k, v in kwargs.items():
-        if k in list_fields and isinstance(v, list):
-            # Merge by name — replace existing entry with same name, append new ones
-            existing_by_name = {item["name"]: item for item in existing.get(k, [])}
-            for item in v:
-                existing_by_name[item["name"]] = item
-            existing[k] = list(existing_by_name.values())
-        elif v is not None:
-            existing[k] = v
-
-    existing["declared_at"] = _now()
-
-    def _mutate(contracts: dict):
-        contracts[node_id] = existing
-
-    mutate_contracts(project_path, _mutate)
-    return existing
-
-
 def delete_contract(project_path: str, node_id: str) -> str:
     def _mutate(contracts: dict):
         if node_id not in contracts:

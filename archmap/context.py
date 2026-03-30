@@ -6,14 +6,18 @@ every other node only as the contract it exposes. This prevents agents from
 accidentally depending on implementation details across boundaries.
 
 Key tools:
-  get_work_context   — full-detail self + contract-only others + step_size
-  get_change_surface — which nodes/levels are affected by changing a symbol
-  get_domain_map     — L2 domain overview (entry point for all agent sessions)
-  describe_node      — drill-down from any level into its children
+  get_context      — unified pre-edit context (self + contracts + quality + tasks + rules)
+  get_domain_map   — L2 domain overview (entry point for all agent sessions)
+  describe_node    — drill-down from any level into its children
 """
 from __future__ import annotations
 from archmap.repo import load_arch, load_mappings, load_plan
 from archmap.contracts import get_contract
+import archmap.impact as impact_mod
+import archmap.planning as plan_mod
+import archmap.quality as quality_mod
+import archmap.rules as rules_mod
+import archmap.decisions as decisions_mod
 
 
 # ─── Step-size classification ─────────────────────────────────────────────────
@@ -199,112 +203,6 @@ def get_work_context(
 
 # ─── get_change_surface ───────────────────────────────────────────────────────
 
-def get_change_surface(
-    project_path: str,
-    symbol_names: list[str],
-) -> dict:
-    """
-    Given a list of symbol names, determine the full change surface:
-    - which components own these symbols
-    - which edges reference them in interface_points
-    - which components will break (stable edges)
-    - recommended update order
-    - step_size classification
-    """
-    arch = load_arch(project_path)
-    mappings = load_mappings(project_path)
-    by_id = {c["id"]: c for c in arch.get("components", [])}
-
-    query_set = set(symbol_names)
-
-    # ── Find owning components ─────────────────────────────────────────────────
-    owners: dict[str, dict] = {}   # symbol → {component_id, file_path, in_public_api}
-    for fp, rec in mappings.get("files", {}).items():
-        cid = rec.get("component_id", "")
-        comp = by_id.get(cid, {})
-        public_api = set(comp.get("public_api", []))
-        for sym in rec.get("symbols", []):
-            name = sym.get("name", "")
-            if name in query_set:
-                owners[name] = {
-                    "symbol": name,
-                    "component_id": cid,
-                    "component_name": comp.get("name", cid),
-                    "component_level": comp.get("level", 4),
-                    "file_path": fp,
-                    "in_public_api": name in public_api,
-                    "visibility": sym.get("visibility", "public"),
-                }
-
-    # ── Find edges that reference these symbols ────────────────────────────────
-    affected_edges: list[dict] = []
-    for dep in arch.get("dependencies", []):
-        pts = set(dep.get("interface_points", []))
-        matched = list(pts & query_set)
-        if matched:
-            from_node = by_id.get(dep["from_component"], {})
-            to_node = by_id.get(dep["to_component"], {})
-            affected_edges.append({
-                "dep_id": dep["id"],
-                "from_component": dep["from_component"],
-                "from_name": from_node.get("name", dep["from_component"]),
-                "from_level": from_node.get("level", 4),
-                "to_component": dep["to_component"],
-                "to_name": to_node.get("name", dep["to_component"]),
-                "to_level": to_node.get("level", 4),
-                "matched_symbols": matched,
-                "edge_type": dep.get("edge_type", "invoke"),
-                "stability": dep.get("stability", "stable"),
-                "crosses_boundary": dep.get("crosses_boundary", False),
-                "will_break": dep.get("stability") == "stable",
-            })
-
-    # ── Components that need updating ─────────────────────────────────────────
-    touched_comp_ids: set[str] = set()
-    for o in owners.values():
-        touched_comp_ids.add(o["component_id"])
-    for e in affected_edges:
-        touched_comp_ids.add(e["from_component"])
-        touched_comp_ids.add(e["to_component"])
-
-    touched_levels = {by_id.get(cid, {}).get("level", 4) for cid in touched_comp_ids}
-    crosses_service = any(lv <= 3 for lv in touched_levels)
-    crosses_domain  = any(lv <= 2 for lv in touched_levels)
-    step = _classify_step(touched_levels, touched_comp_ids, crosses_service, crosses_domain)
-
-    # ── Build recommended update order (topological: owners first, then callers) ──
-    order: list[str] = []
-    ordered_ids: set[str] = set()
-
-    def _push(cid: str, reason: str):
-        if cid not in ordered_ids:
-            c = by_id.get(cid, {})
-            order.append(f"{c.get('name', cid)} [{reason}]")
-            ordered_ids.add(cid)
-
-    for sym, info in owners.items():
-        _push(info["component_id"], f"owns {sym}")
-    for e in sorted(affected_edges, key=lambda x: x.get("to_level", 4)):
-        _push(e["to_component"], f"caller via {e['edge_type']}")
-        _push(e["from_component"], f"uses {','.join(e['matched_symbols'])}")
-
-    return {
-        "symbols_queried": symbol_names,
-        "owners": list(owners.values()),
-        "affected_edges": affected_edges,
-        "breaking_edge_count": sum(1 for e in affected_edges if e["will_break"]),
-        "touched_components": [
-            {"id": cid, "name": by_id.get(cid, {}).get("name", cid),
-             "level": by_id.get(cid, {}).get("level", 4)}
-            for cid in sorted(touched_comp_ids)
-        ],
-        "step_size": step,
-        "step_explanation": _STEP_LABELS.get(step, ""),
-        "adr_recommended": step in ("cross",),
-        "recommended_update_order": order,
-    }
-
-
 # ─── get_domain_map ───────────────────────────────────────────────────────────
 
 def get_domain_map(project_path: str) -> dict:
@@ -448,6 +346,158 @@ def _collect_descendants(arch: dict, node_id: str) -> set[str]:
                 result.add(c["id"])
                 queue.append(c["id"])
     return result
+
+
+def get_context(
+    project_path: str,
+    component_id: str,
+    task: str = "",
+    depth: str = "implement",
+) -> dict:
+    """
+    Unified pre-edit context for agents — replaces get_generation_context and get_work_context.
+
+    depth controls how much context is returned (use smaller values to save context window):
+      "orient"     — component metadata + impact summary + first 3 open tasks
+      "plan"       — orient + i_consume (contracts) + applicable_rules + decisions
+      "implement"  — full detail: all of the above + i_own (files+symbols) + quality + coordination
+
+    Returns (at implement depth):
+      component:          metadata (id, name, layer, description, owner, tier)
+      i_own:              files + symbols at full detail (owned + descendants)
+      i_consume:          upstream nodes as contracts only (no source)
+      impact:             upstream_names, impact_score, cycles, step_size
+      open_tasks:         [{title, priority, status}]
+      applicable_rules:   layer rules that apply to this component
+      decisions:          accepted ADRs for this component
+      quality:            {score, error_count, warning_count, fix_priority}
+      coordination_needed: callers that break if public interface changes
+      adr_recommended:    whether an ADR is warranted for this change
+    """
+    arch = load_arch(project_path)
+    by_id = {c["id"]: c for c in arch.get("components", [])}
+    node = by_id.get(component_id, {})
+    if not node:
+        return {"error": f"Node not found: {component_id!r}"}
+    layer = node.get("layer", "other")
+
+    try:
+        impact_data = impact_mod.get_component_impact(project_path, component_id)
+    except Exception:
+        impact_data = {}
+
+    try:
+        all_tasks = plan_mod.list_plan_items(project_path, component_id=component_id)
+        open_tasks = [t for t in all_tasks if t.get("status") not in ("done", "cancelled")]
+    except Exception:
+        open_tasks = []
+
+    component_meta = {
+        "id": component_id,
+        "name": node.get("name", ""),
+        "layer": layer,
+        "description": node.get("description", ""),
+        "owner": node.get("owner", ""),
+        "tier": node.get("tier", ""),
+    }
+    impact_summary = {
+        "upstream_names": impact_data.get("upstream_names", []),
+        "impact_score": impact_data.get("impact_score", 0),
+        "cycles": impact_data.get("cycles", []),
+        "step_size": "local",
+    }
+
+    # ── orient: bare minimum ───────────────────────────────────────────────────
+    if depth == "orient":
+        return {
+            "depth": "orient",
+            "component": component_meta,
+            "impact": impact_summary,
+            "open_tasks": open_tasks[:3],
+        }
+
+    # ── plan: + contracts + rules + decisions ──────────────────────────────────
+    try:
+        all_rules = rules_mod.load_rules(project_path)
+        applicable_rules = [
+            r for r in all_rules
+            if r.get("from_layer") == layer
+            or r.get("to_layer") == layer
+            or r.get("type") == "no_cycles"
+        ]
+    except Exception:
+        applicable_rules = []
+
+    try:
+        decisions = decisions_mod.get_decisions_for_context(project_path, component_id)
+    except Exception:
+        decisions = []
+
+    # i_consume: outgoing deps as contracts only (shared by plan + implement)
+    deps = arch.get("dependencies", [])
+    descendant_ids = _collect_descendants(arch, component_id)
+    owned_node_ids = {component_id} | descendant_ids
+    outgoing = [d for d in deps if d.get("from_component") in owned_node_ids]
+    consumed_ids = {d["to_component"] for d in outgoing if d["to_component"] not in owned_node_ids}
+    consumed: list[dict] = []
+    for cid in consumed_ids:
+        dep = next((d for d in outgoing if d["to_component"] == cid), {})
+        contract = get_contract(project_path, cid)
+        cnode = by_id.get(cid, {})
+        consumed.append({
+            "node_id": cid,
+            "node_name": cnode.get("name", cid),
+            "level": cnode.get("level", 4),
+            "edge_type": dep.get("edge_type", "invoke"),
+            "contract": {
+                "commands": contract.get("commands", []),
+                "queries": contract.get("queries", []),
+                "events_emitted": contract.get("events_emitted", []),
+                "data_owned": contract.get("data_owned", []),
+                "declared": contract.get("declared", False),
+            },
+        })
+
+    if depth == "plan":
+        return {
+            "depth": "plan",
+            "component": component_meta,
+            "impact": impact_summary,
+            "open_tasks": open_tasks,
+            "i_consume": consumed,
+            "applicable_rules": applicable_rules,
+            "decisions": decisions,
+        }
+
+    # ── implement: full detail ─────────────────────────────────────────────────
+    work = get_work_context(project_path, component_id, task)
+    impact_summary["step_size"] = work.get("step_size", "local")
+
+    try:
+        quality_report = quality_mod.get_quality_report(project_path, component_id)
+        quality = {
+            "score": quality_report.get("score", 100),
+            "error_count": quality_report.get("error_count", 0),
+            "warning_count": quality_report.get("warning_count", 0),
+            "fix_priority": quality_report.get("fix_priority", []),
+            "summary": quality_report.get("summary", ""),
+        }
+    except Exception:
+        quality = {"score": 100, "error_count": 0, "warning_count": 0, "fix_priority": [], "summary": ""}
+
+    return {
+        "depth": "implement",
+        "component": component_meta,
+        "i_own": work.get("i_own", {}),
+        "i_consume": work.get("i_consume", []),
+        "impact": impact_summary,
+        "open_tasks": open_tasks,
+        "applicable_rules": applicable_rules,
+        "decisions": decisions,
+        "quality": quality,
+        "coordination_needed": work.get("coordination_needed", []),
+        "adr_recommended": work.get("adr_recommended", False),
+    }
 
 
 def _edge_summary(dep: dict, by_id: dict) -> dict:

@@ -28,13 +28,10 @@ import archmap.impact as impact_mod
 import archmap.inference as infer_mod
 import archmap.intelligence as intel_mod
 import archmap.mapping as map_mod
-import archmap.metrics as metrics_mod
 import archmap.quality as quality_mod
 import archmap.migration as migration_mod
 import archmap.planning as plan_mod
-import archmap.project as proj_mod
 import archmap.rules as rules_mod
-import archmap.scanner as scan_mod
 import archmap.decisions as decisions_mod
 import archmap.session as session_mod
 import archmap.symbols as symbols_mod
@@ -86,30 +83,6 @@ def _err(
 
 
 # ─── Project tools ────────────────────────────────────────────────────────────
-
-def init_project(project_path: str, name: str = "") -> str:
-    """
-    Initialize ArchMap in a project directory.
-    Creates .archmap/ with empty architecture, mappings, and plan files.
-    Safe to call on an already-initialized project — returns existing meta.
-    """
-    try:
-        result = proj_mod.init_project(project_path, name=name or None)
-        return _ok(result)
-    except Exception as e:
-        return _err(str(e))
-
-
-def project_status(project_path: str) -> str:
-    """
-    Get a summary of ArchMap data for a project:
-    component count, dependency count, mapped files, open plan items.
-    """
-    try:
-        return _ok(proj_mod.project_status(project_path))
-    except Exception as e:
-        return _err(str(e))
-
 
 # ─── Intent-driven bootstrap ──────────────────────────────────────────────────
 
@@ -492,6 +465,7 @@ def update_component(
         return _err(str(e))
 
 
+@mcp.tool()
 def delete_component(project_path: str, component_id: str) -> str:
     """
     Delete a component and all its dependencies.
@@ -503,6 +477,7 @@ def delete_component(project_path: str, component_id: str) -> str:
         return _err(str(e))
 
 
+@mcp.tool()
 def add_dependency(
     project_path: str,
     from_component: str,
@@ -523,6 +498,7 @@ def add_dependency(
         return _err(str(e))
 
 
+@mcp.tool()
 def remove_dependency(project_path: str, dependency_id: str) -> str:
     """Remove a dependency edge by its ID."""
     try:
@@ -557,6 +533,7 @@ def map_file(project_path: str, file_path: str, component_id: str) -> str:
         return _err(str(e))
 
 
+@mcp.tool()
 def unmap_file(project_path: str, file_path: str) -> str:
     """Remove the component mapping for a file."""
     try:
@@ -565,6 +542,7 @@ def unmap_file(project_path: str, file_path: str) -> str:
         return _err(str(e))
 
 
+@mcp.tool()
 def cleanup_non_source_mappings(project_path: str) -> str:
     """
     Remove all mapped files that are not source code — docs, config files,
@@ -620,184 +598,6 @@ def bulk_map(project_path: str, mappings_json: str) -> str:
         return _err(str(e))
 
 
-def list_all_mappings(project_path: str) -> str:
-    """List all file-to-component mappings in the project."""
-    try:
-        return _ok(map_mod.list_all_mappings(project_path))
-    except Exception as e:
-        return _err(str(e))
-
-
-def annotate_file(
-    project_path: str,
-    file_path: str,
-    description: str = "",
-    functions: str = "",
-    language: str = "",
-) -> str:
-    """
-    Annotate a mapped file with description, key functions/classes, and language.
-    Call after map_file to enrich the architecture with implementation details.
-
-    functions: comma-separated list of key functions/classes (e.g. "authenticate(), UserModel, validate_token()")
-    language: programming language (e.g. "python", "typescript")
-    """
-    try:
-        metadata: dict = {}
-        if description:
-            metadata["description"] = description
-        if functions:
-            metadata["functions"] = [f.strip() for f in functions.split(",") if f.strip()]
-        if language:
-            metadata["language"] = language
-        return _ok(map_mod.update_file_metadata(project_path, file_path, metadata))
-    except NotFoundError as e:
-        return _err(str(e))
-    except Exception as e:
-        return _err(str(e))
-
-
-# ─── Inference tools ──────────────────────────────────────────────────────────
-
-def infer_dependencies(project_path: str, overwrite_auto: bool = False) -> str:
-    """
-    Scan all mapped files for import statements and auto-detect cross-component
-    dependencies. Adds inferred deps with confidence='auto' (shown as dashed
-    edges in the UI). Confirmed deps are never overwritten.
-
-    overwrite_auto: if True, refresh previously auto-inferred deps.
-
-    Returns: {added, skipped, unmapped, dependencies}
-    - added       — new deps written to architecture.json
-    - skipped     — pairs that already had a confirmed dep
-    - unmapped    — files that are imported but not yet mapped to a component
-    - dependencies — the dep objects that were added
-    """
-    try:
-        return _ok(infer_mod.infer_dependencies(project_path, overwrite_auto=overwrite_auto))
-    except Exception as e:
-        return _err(str(e))
-
-
-def confirm_dependency(project_path: str, dependency_id: str) -> str:
-    """
-    Promote an auto-inferred dependency to confirmed.
-    Use this after reviewing an inferred dep to mark it as intentional.
-    """
-    try:
-        return _ok(infer_mod.confirm_dependency(project_path, dependency_id))
-    except Exception as e:
-        return _err(str(e))
-
-
-# ─── Planning tools ───────────────────────────────────────────────────────────
-
-def list_plan_items(
-    project_path: str,
-    component_id: str = "",
-    status: str = "",
-    priority: str = "",
-) -> str:
-    """
-    List plan items. Optionally filter by component, status, or priority.
-    status: todo | in_progress | done | blocked | cancelled
-    priority: low | medium | high | critical
-    """
-    try:
-        return _ok(plan_mod.list_plan_items(
-            project_path,
-            component_id=component_id or None,
-            status=status or None,
-            priority=priority or None,
-        ))
-    except Exception as e:
-        return _err(str(e))
-
-
-def create_plan_item(
-    project_path: str,
-    title: str,
-    description: str = "",
-    component_id: str = "",
-    priority: str = "medium",
-    tags: str = "",
-) -> str:
-    """
-    Create a new plan item (task), optionally tied to a component.
-    priority: low | medium | high | critical
-    tags: comma-separated string
-    """
-    try:
-        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
-        return _ok(plan_mod.create_plan_item(
-            project_path,
-            title=title,
-            description=description,
-            component_id=component_id or None,
-            priority=priority,
-            tags=tag_list,
-        ))
-    except Exception as e:
-        return _err(str(e))
-
-
-def update_plan_item(
-    project_path: str,
-    item_id: str,
-    title: str = "",
-    description: str = "",
-    status: str = "",
-    priority: str = "",
-    component_id: str = "",
-    tags: str = "",
-) -> str:
-    """
-    Update a plan item. Only non-empty arguments are applied.
-    status: todo | in_progress | done | blocked | cancelled
-    """
-    try:
-        kwargs = {}
-        if title: kwargs["title"] = title
-        if description: kwargs["description"] = description
-        if status: kwargs["status"] = status
-        if priority: kwargs["priority"] = priority
-        if component_id: kwargs["component_id"] = component_id
-        if tags: kwargs["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
-        return _ok(plan_mod.update_plan_item(project_path, item_id, **kwargs))
-    except Exception as e:
-        return _err(str(e))
-
-
-def delete_plan_item(project_path: str, item_id: str) -> str:
-    """Delete a plan item by ID."""
-    try:
-        return _ok(plan_mod.delete_plan_item(project_path, item_id))
-    except Exception as e:
-        return _err(str(e))
-
-
-# ─── Scanner tool ─────────────────────────────────────────────────────────────
-
-def scan_project(
-    project_path: str,
-    overwrite_auto: bool = False,
-    depth: int = 2,
-) -> str:
-    """
-    Auto-scan a project directory to detect architecture components from folder structure.
-    Creates components with confidence='auto' and maps files to them.
-
-    overwrite_auto: if True, re-detect and replace existing auto components
-    depth: how many folder levels to scan (default 2)
-
-    Run this after init_project to get a starting architecture map.
-    """
-    try:
-        return _ok(scan_mod.scan_project(project_path, overwrite_auto=overwrite_auto, depth=depth))
-    except Exception as e:
-        return _err(str(e))
-
-
 # ─── Architecture intelligence ────────────────────────────────────────────────
 
 @mcp.tool()
@@ -818,74 +618,18 @@ def describe_architecture(project_path: str) -> str:
 
 
 @mcp.tool()
-def find_related(project_path: str, query: str) -> str:
+def search(project_path: str, query: str) -> str:
     """
     Full-text search across ALL architecture entities: component names and
     descriptions, file paths and descriptions, and symbol names.
     Returns ranked results grouped into components, files, and symbols.
 
     Use this to answer "where does X live?" before reading any source files.
-    Examples: find_related("auth"), find_related("database"), find_related("validate")
+    Examples: search("auth"), search("database"), search("validate")
     Returns: {query, summary, components[], files[], symbols[]}
     """
     try:
         return _ok(intel_mod.find_related(project_path, query))
-    except Exception as e:
-        return _err(str(e))
-
-
-def get_symbol_index(project_path: str) -> str:
-    """
-    Return the complete symbol index: every function and class name in the
-    project mapped to its source file and component.
-    Sorted by (component, file, symbol) for easy scanning.
-
-    Use this to locate any function or class without reading source files.
-    Each entry: {symbol, file_path, language, component_id, component_name, component_layer}
-    """
-    try:
-        return _ok(intel_mod.get_symbol_index(project_path))
-    except Exception as e:
-        return _err(str(e))
-
-
-def trace_path(project_path: str, from_component_id: str, to_component_id: str) -> str:
-    """
-    Find the shortest dependency path between two components using BFS.
-    Returns each hop with the dependency label and key files at that component.
-
-    Use this to understand data flow: "how does the frontend reach the database?"
-    or to assess blast radius: "what chain of components do I cross to reach X?"
-    Returns: {found, length, text, path[{component_id, component_name, layer, via_dependency, files}]}
-    """
-    try:
-        return _ok(intel_mod.trace_path(project_path, from_component_id, to_component_id))
-    except Exception as e:
-        return _err(str(e))
-
-
-# ─── Symbol sync + search + coding context ────────────────────────────────────
-
-def sync_file_symbols(project_path: str, file_path: str) -> str:
-    """
-    Scan the actual source file and auto-extract all top-level functions and classes,
-    then update the file's mapping metadata. Call this after editing a file to keep
-    the architecture graph in sync with the real code.
-
-    Returns the updated FileMapping with the refreshed symbol list.
-    """
-    try:
-        extracted = symbols_mod.extract_all_symbols(project_path, file_path)
-        metadata: dict = {
-            "functions": extracted["symbols"],
-            "symbol_details": extracted.get("details", []),
-        }
-        if extracted["language"]:
-            metadata["language"] = extracted["language"]
-        result = map_mod.update_file_metadata(project_path, file_path, metadata)
-        return _ok(result)
-    except NotFoundError as e:
-        return _err(f"File not mapped: {e}")
     except Exception as e:
         return _err(str(e))
 
@@ -942,261 +686,40 @@ def search_symbol(project_path: str, query: str = "") -> str:
         return _err(str(e))
 
 
-def get_coding_context(project_path: str, component_id: str) -> str:
-    """
-    Get everything needed to code in a component: its files with symbols,
-    related dependencies (with component names), and open plan items.
-
-    Call this before starting work on a component so you know:
-    - which files belong to it and what functions they export
-    - what other components it depends on (and what depends on it)
-    - what tasks are planned or in-progress for it
-
-    Returns both a human-readable summary and the raw data.
-    """
-    try:
-        comp = arch_mod.get_component(project_path, component_id)
-        files = map_mod.list_component_files(project_path, component_id)
-        arch = arch_mod.get_architecture(project_path)
-        items = plan_mod.list_plan_items(project_path, component_id=component_id)
-
-        name_map = {c["id"]: c["name"] for c in arch.get("components", [])}
-        enriched_deps = []
-        for d in arch.get("dependencies", []):
-            if d["from_component"] == component_id or d["to_component"] == component_id:
-                enriched_deps.append({
-                    **d,
-                    "from_name": name_map.get(d["from_component"], d["from_component"]),
-                    "to_name": name_map.get(d["to_component"], d["to_component"]),
-                })
-
-        # Human-readable summary
-        lines = [
-            f"## Component: {comp['name']} ({comp['layer']})",
-            f"{comp.get('description', '(no description)')}",
-            "",
-            f"### Files ({len(files)})",
-        ]
-        for f in files:
-            meta = f.get("metadata", {})
-            desc = meta.get("description", "")
-            lang = f.get("language", "") or meta.get("language", "")
-            lang_tag = f"  [{lang}]" if lang else ""
-            lines.append(f"- {f['file_path']}{lang_tag}" + (f"  — {desc}" if desc else ""))
-            syms = f.get("symbols", [])
-            if syms:
-                sym_names = [s.get("display_name", s.get("name", "")) for s in syms]
-                lines.append(f"  Symbols: {', '.join(sym_names)}")
-            elif meta.get("functions"):
-                # Legacy fallback
-                lines.append(f"  Symbols: {', '.join(meta['functions'])}")
-
-        lines += ["", f"### Dependencies ({len(enriched_deps)})"]
-        for d in enriched_deps:
-            direction = "→" if d["from_component"] == component_id else "←"
-            other = d["to_name"] if d["from_component"] == component_id else d["from_name"]
-            lines.append(f"- {d.get('label','?')} {direction} {other} ({d.get('confidence','?')})")
-
-        open_items = [it for it in items if it.get("status") not in ("done", "cancelled")]
-        lines += ["", f"### Open Plan Items ({len(open_items)})"]
-        for it in open_items:
-            lines.append(f"- [{it['priority']}] {it['title']} ({it['status']})")
-
-        return _ok({
-            "text": "\n".join(lines),
-            "component": comp,
-            "files": files,
-            "dependencies": enriched_deps,
-            "plan_items": items,
-        })
-    except NotFoundError as e:
-        return _err(f"Component not found: {e}")
-    except Exception as e:
-        return _err(str(e))
-
-
-# ─── Pre-generation scaffold context ─────────────────────────────────────────
+# ─── Unified agent context ────────────────────────────────────────────────────
 
 @mcp.tool()
-def get_generation_context(
+def get_context(
     project_path: str,
     component_id: str,
     task: str = "",
+    depth: str = "implement",
 ) -> str:
     """
-    Assemble all architectural context needed before generating code in a component.
+    Primary pre-edit context for agents — call this before touching any component.
 
-    Replaces ~7 separate tool calls (get_component, list_component_files,
-    get_component_interface, get_component_impact, list_plan_items,
-    list_architecture_rules, validate_architecture) with one structured response.
+    depth controls how much context is returned (use smaller values to save context window):
+      "orient"    — component metadata + impact summary + first 3 open tasks (~300 tokens)
+      "plan"      — orient + i_consume (contracts) + rules + decisions (~800 tokens)
+      "implement" — full detail: files+symbols, quality, coordination_needed (~2000 tokens)
 
-    The `generation_brief` field in the response is a compact, ready-to-inject
-    Markdown excerpt that encodes everything the LLM needs to generate
-    architecture-consistent code. Prepend it to your code generation prompt.
+    Returns at "implement" depth:
+      component:          id, name, layer, description, owner, tier
+      i_own:              files + symbols at full detail (owned + descendants)
+      i_consume:          upstream nodes as contracts only (no source)
+      impact:             upstream_names, impact_score, cycles, step_size
+      open_tasks:         tasks for this component
+      applicable_rules:   layer rules (e.g. no frontend→database)
+      decisions:          accepted ADRs for this component
+      quality:            score 0-100, error_count, warning_count, fix_priority
+      coordination_needed: callers that break if public interface changes
+      adr_recommended:    whether an ADR is warranted
 
-    Args:
-        component_id: The component you are about to generate code in.
-        task:         (optional) What you are about to generate. Narrows the brief.
-
-    Returns:
-        {
-          component:        {id, name, layer, description, confidence},
-          files:            [{file_path, language, symbol_count, public_symbols}],
-          interface:        {exports: [...], imports_from: [...]},
-          impact:           {upstream_names, impact_score, cycles, is_root, is_leaf},
-          open_tasks:       [{title, priority, status}],
-          applicable_rules: [{type, from_layer, to_layer, message}],
-          generation_brief: "## Code Generation Context\\n..."  ← inject into prompt
-        }
+    After editing: call post_edit_sync, then check_code_quality to confirm score
+    did not decrease.
     """
     try:
-        comp       = arch_mod.get_component(project_path, component_id)
-        files      = map_mod.list_component_files(project_path, component_id)
-        iface      = cognition_mod.get_component_interface(project_path, component_id)
-        impact     = impact_mod.get_component_impact(project_path, component_id)
-        tasks      = plan_mod.list_plan_items(project_path, component_id=component_id)
-        all_rules  = rules_mod.load_rules(project_path)
-        try:
-            adrs = decisions_mod.get_decisions_for_context(project_path, component_id)
-        except Exception:
-            adrs = []
-
-        layer = comp.get("layer", "other")
-
-        # Rules that directly apply to this layer
-        applicable_rules = [
-            r for r in all_rules
-            if r.get("from_layer") == layer
-            or r.get("to_layer") == layer
-            or r.get("type") == "no_cycles"
-        ]
-
-        open_tasks = [t for t in tasks if t.get("status") not in ("done", "cancelled")]
-
-        # Compact file summary for brief
-        file_summaries: list[dict] = []
-        for f in files:
-            syms = f.get("symbols", [])
-            public = [s.get("display_name", s.get("name", "")) for s in syms
-                      if s.get("visibility", "public") == "public"]
-            if not syms:
-                public = [fn for fn in f.get("metadata", {}).get("functions", [])
-                          if not fn.startswith("_")]
-            file_summaries.append({
-                "file_path":     f["file_path"],
-                "language":      f.get("language", "") or f.get("metadata", {}).get("language", ""),
-                "symbol_count":  len(syms),
-                "public_symbols": public[:12],
-            })
-
-        # ── Build generation_brief ─────────────────────────────────────────
-        brief_lines: list[str] = [
-            "## Code Generation Context",
-            "",
-            f"**Component:** {comp['name']}  |  **Layer:** {layer}  |  **Confidence:** {comp.get('confidence', '?')}",
-        ]
-        if comp.get("description"):
-            brief_lines.append(f"**Purpose:** {comp['description']}")
-        if comp.get("owner"):
-            tier_str = f" | Tier: {comp['tier'].upper()}" if comp.get("tier") else ""
-            brief_lines.append(f"**Owner:** {comp['owner']}{tier_str}")
-        if task:
-            brief_lines.append(f"**Task:** {task}")
-        brief_lines.append("")
-        if comp.get("onboarding_notes"):
-            brief_lines.append(f"**Onboarding notes:** {comp['onboarding_notes']}")
-            brief_lines.append("")
-
-        if file_summaries:
-            brief_lines.append("**Files in this component:**")
-            for fs in file_summaries:
-                sym_str = ", ".join(fs["public_symbols"]) if fs["public_symbols"] else "(none synced)"
-                lang    = f" [{fs['language']}]" if fs["language"] else ""
-                brief_lines.append(f"- `{fs['file_path']}`{lang} → {sym_str}")
-            brief_lines.append("")
-
-        exports = iface.get("exports", [])
-        if exports:
-            brief_lines.append("**This component's public API (do not break these signatures):**")
-            for e in exports[:10]:
-                sig = e.get("signature") or e.get("display_name", e.get("name", ""))
-                brief_lines.append(f"- `{sig}`")
-            brief_lines.append("")
-
-        imports_from = iface.get("imports_from", [])
-        if imports_from:
-            brief_lines.append("**Available to import from dependencies:**")
-            for dep in imports_from[:5]:
-                avail = ", ".join(dep.get("available_exports", [])[:6])
-                brief_lines.append(f"- **{dep['component_name']}**: {avail or '(no symbols indexed)'}")
-            brief_lines.append("")
-
-        upstream = impact.get("upstream_names", [])
-        if upstream:
-            brief_lines.append(
-                f"**Blast radius:** {len(upstream)} component(s) depend on this "
-                f"({', '.join(upstream[:4])}{'...' if len(upstream) > 4 else ''}). "
-                "Do not change public signatures without updating callers."
-            )
-            brief_lines.append("")
-
-        cycles = impact.get("cycles", [])
-        if cycles:
-            name_map = {c["id"]: c["name"] for c in arch_mod.get_architecture(project_path).get("components", [])}
-            cycle_names = [name_map.get(c, c) for c in cycles]
-            brief_lines.append(f"**WARNING — Circular dependencies detected:** {', '.join(cycle_names)}. Resolve before adding new code.")
-            brief_lines.append("")
-
-        if applicable_rules:
-            brief_lines.append("**Architectural rules for this layer:**")
-            for r in applicable_rules:
-                if r["type"] == "no_dep":
-                    brief_lines.append(f"- RULE: `{r.get('from_layer')}` MUST NOT depend on `{r.get('to_layer')}` — {r.get('message', '')}")
-                elif r["type"] == "no_cycles":
-                    brief_lines.append(f"- RULE: No circular dependencies — {r.get('message', '')}")
-                elif r["type"] == "required_dep":
-                    brief_lines.append(f"- RULE: `{r.get('from_layer')}` MUST depend on `{r.get('to_layer')}` — {r.get('message', '')}")
-            brief_lines.append("")
-
-        if open_tasks:
-            brief_lines.append("**Open tasks for this component:**")
-            for t in open_tasks[:5]:
-                brief_lines.append(f"- [{t['priority'].upper()}] {t['title']} ({t['status']})")
-            brief_lines.append("")
-
-        if adrs:
-            brief_lines.append("**Architecture decisions in effect (ADRs):**")
-            for adr in adrs[:5]:
-                brief_lines.append(f"- **{adr['title']}**: {adr['decision'][:120]}{'...' if len(adr.get('decision','')) > 120 else ''}")
-                if adr.get("consequences"):
-                    brief_lines.append(f"  Trade-offs: {adr['consequences'][:100]}{'...' if len(adr.get('consequences','')) > 100 else ''}")
-            brief_lines.append("")
-
-        brief_lines.append(
-            "_After generating code: call `post_edit_sync(file_paths=[...], "
-            "reinfer_dependencies=True, validate=True)` to sync symbols and check rules._"
-        )
-
-        return _ok({
-            "component":        {k: comp.get(k) for k in (
-                "id", "name", "layer", "description", "confidence", "tags",
-                "owner", "tier", "onboarding_notes", "runbook_url", "slack_channel",
-            )},
-            "files":            file_summaries,
-            "interface":        {"exports": exports[:20], "imports_from": imports_from},
-            "impact":           {
-                "upstream_names": impact.get("upstream_names", []),
-                "impact_score":   impact.get("impact_score", 0),
-                "cycles":         impact.get("cycles", []),
-                "is_root":        impact.get("is_root", False),
-                "is_leaf":        impact.get("is_leaf", False),
-            },
-            "open_tasks":       open_tasks,
-            "applicable_rules": applicable_rules,
-            "decisions":        adrs,
-            "generation_brief": "\n".join(brief_lines),
-        })
-
+        return _ok(ctx_mod.get_context(project_path, component_id, task, depth))
     except NotFoundError as e:
         return _err(str(e), error_code="NOT_FOUND",
                     suggestion="Run list_components() to get valid component IDs.")
@@ -1205,24 +728,6 @@ def get_generation_context(
 
 
 # ─── Metrics & impact ─────────────────────────────────────────────────────────
-
-@mcp.tool()
-def get_component_metrics(project_path: str, component_id: str) -> str:
-    """
-    Return code quality metrics for a component: line count, keyword complexity,
-    git churn, and hotspot detection (high churn + high complexity) per file,
-    plus aggregate totals.
-
-    Use before editing a component to understand its risk profile:
-    - high churn + high complexity = hotspot, change carefully
-    - low churn + high complexity = stable but hard to read
-    - high churn + low complexity = frequently updated, low risk
-    """
-    try:
-        return _ok(metrics_mod.get_component_metrics(project_path, component_id))
-    except Exception as e:
-        return _err(str(e))
-
 
 @mcp.tool()
 def check_code_quality(
@@ -1330,7 +835,7 @@ def post_edit_sync(
     choose the correct component or create a new one with add_component().
 
     Agent workflow:
-      1. get_generation_context(component_id, task="...")  ← before generating
+      1. get_context(component_id, task="...")  ← before generating
       2. generate + edit files (Read / Edit / Write)
       3. post_edit_sync(file_paths=[...],                  ← after generating
                         reinfer_dependencies=True,
@@ -1471,7 +976,7 @@ def read_function(project_path: str, file_path: str, symbol: str) -> str:
 
     This is the final step of the agent navigation loop:
       1. describe_architecture()  — understand the landscape
-      2. find_related() / get_symbol_index()  — locate which file owns the symbol
+      2. search_symbol()  — locate which file owns the symbol
       3. read_function(file_path, symbol)  — read exactly that function, nothing else
 
     Returns: {symbol, file_path, code, start_line, end_line, language}
@@ -1490,101 +995,9 @@ def read_function(project_path: str, file_path: str, symbol: str) -> str:
         return _err(str(e))
 
 
-def read_file(project_path: str, file_path: str, start_line: int = 0, end_line: int = 0) -> str:
-    """
-    Read the full content of a mapped file (or a line range of it).
-
-    Use this when you need to read more than one function, or when the file is
-    short and reading it whole is the simplest approach. For reading a single
-    named function use read_function() instead — it uses less context.
-
-    Args:
-        file_path: Path relative to project_path (forward slashes).
-        start_line: First line to return (1-based). 0 = from beginning.
-        end_line:   Last line to return (inclusive, 1-based). 0 = to end.
-
-    Returns: {file_path, content, lines, start_line, end_line}
-    """
-    try:
-        result = symbols_mod.get_file_content(project_path, file_path)
-        if start_line > 0 or end_line > 0:
-            all_lines = result["content"].splitlines(keepends=True)
-            s = max(0, start_line - 1)
-            e = end_line if end_line > 0 else len(all_lines)
-            result["content"] = "".join(all_lines[s:e])
-            result["start_line"] = s + 1
-            result["end_line"] = min(e, len(all_lines))
-        return _ok(result)
-    except FileNotFoundError:
-        return _err(f"File not found: {file_path}")
-    except Exception as e:
-        return _err(str(e))
-
-
-# ─── Cycle detection ──────────────────────────────────────────────────────────
-
-def list_cycles(project_path: str) -> str:
-    """
-    Find all dependency cycles in the architecture.
-
-    A cycle means component A depends on component B which (directly or
-    indirectly) depends back on A — a design smell that makes components
-    hard to test, deploy, and reason about independently.
-
-    Returns: {cycle_count, cycles: [{component_id, component_name, layer, cycles_with: [...]}]}
-    """
-    try:
-        arch = arch_mod.get_architecture(project_path)
-        components = arch.get("components", [])
-        deps = arch.get("dependencies", [])
-        name_map = {c["id"]: c["name"] for c in components}
-        layer_map = {c["id"]: c.get("layer", "") for c in components}
-
-        outgoing: dict[str, list[str]] = {c["id"]: [] for c in components}
-        for d in deps:
-            if d["from_component"] in outgoing:
-                outgoing[d["from_component"]].append(d["to_component"])
-
-        def bfs(start: str) -> set[str]:
-            visited: set[str] = set()
-            queue = [start]
-            while queue:
-                cur = queue.pop(0)
-                for nxt in outgoing.get(cur, []):
-                    if nxt not in visited and nxt != start:
-                        visited.add(nxt)
-                        queue.append(nxt)
-            return visited
-
-        cycles: list[dict] = []
-        seen_pairs: set[tuple] = set()
-        for comp in components:
-            cid = comp["id"]
-            downstream = bfs(cid)
-            cycle_partners = [d for d in downstream if cid in bfs(d)]
-            if cycle_partners:
-                for partner in cycle_partners:
-                    pair = tuple(sorted([cid, partner]))
-                    if pair not in seen_pairs:
-                        seen_pairs.add(pair)
-                        cycles.append({
-                            "component_id": cid,
-                            "component_name": name_map.get(cid, cid),
-                            "layer": layer_map.get(cid, ""),
-                            "cycles_with": [{
-                                "component_id": p,
-                                "component_name": name_map.get(p, p),
-                                "layer": layer_map.get(p, ""),
-                            } for p in cycle_partners],
-                        })
-
-        return _ok({"cycle_count": len(cycles), "cycles": cycles})
-    except Exception as e:
-        return _err(str(e))
-
-
 # ─── Architectural rules ──────────────────────────────────────────────────────
 
+@mcp.tool()
 def validate_architecture(project_path: str) -> str:
     """
     Check all current dependencies against the configured architectural rules.
@@ -1652,106 +1065,7 @@ def delete_architecture_rule(project_path: str, rule_id: str) -> str:
 
 # ─── Audit log ────────────────────────────────────────────────────────────────
 
-def get_audit_log(
-    project_path: str,
-    last_n: int = 50,
-    entity_type: str = "",
-    entity_id: str = "",
-    actor: str = "",
-) -> str:
-    """
-    Return recent architecture change history, newest first.
-
-    Shows who changed what and when — essential for multi-agent workflows
-    where multiple agents or humans may modify the architecture concurrently.
-
-    Args:
-        last_n:      How many entries to return (default 50).
-        entity_type: Filter by entity type: component | dependency | file | plan_item
-        entity_id:   Filter by specific entity ID.
-        actor:       Filter by actor name (e.g. "claude-code", "user").
-
-    Returns: list of {id, timestamp, actor, tool, entity_type, entity_id, change_type, summary}
-    """
-    try:
-        return _ok(audit_mod.get_audit_log(
-            project_path,
-            last_n=last_n,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            actor=actor,
-        ))
-    except Exception as e:
-        return _err(str(e))
-
-
-# ─── Agent cognition queries ──────────────────────────────────────────────────
-
-def who_owns(project_path: str, symbol_name: str) -> str:
-    """
-    Find which file and component owns a named symbol.
-
-    Returns all matches (there may be multiple if the symbol is defined in
-    several files). Each match includes the symbol's visibility, kind,
-    signature, and whether its architecture entry is current.
-
-    The critical pre-edit query: call this before modifying any function or
-    class to understand its architectural role and blast radius.
-
-    Returns: [{symbol_id, name, kind, visibility, is_entry_point, signature,
-               doc, file_path, language, component_id, component_name, layer,
-               synced_at, is_stale}]
-    """
-    try:
-        results = cognition_mod.who_owns_symbol(project_path, symbol_name)
-        warnings: list[str] = []
-        if not results:
-            warnings.append(f"Symbol '{symbol_name}' not found in any mapped file. "
-                            "Run post_edit_sync if you recently added it.")
-        stale = [r for r in results if r.get("is_stale")]
-        if stale:
-            warnings.append(
-                f"{len(stale)} result(s) are stale — call post_edit_sync on "
-                + ", ".join(r["file_path"] for r in stale)
-            )
-        return _ok(results, warnings=warnings)
-    except Exception as e:
-        return _err(str(e), error_code="ERROR", suggestion="Ensure project is initialized with init_project.")
-
-
-def get_component_interface(project_path: str, component_id: str) -> str:
-    """
-    Return the public interface of a component: what it exports, what depends
-    on it, and what it imports from other components.
-
-    Use this before:
-    - Making changes that cross component boundaries
-    - Understanding what other components rely on from this one
-    - Assessing whether a refactor is safe (check who uses your exports)
-
-    Returns:
-      exports:       Public symbols this component exposes to others
-      used_by:       Components that depend on this component (upstream)
-      imports_from:  Components this one depends on, with their available exports
-      export_count:  Number of public symbols (public surface area size)
-    """
-    try:
-        result = cognition_mod.get_component_interface(project_path, component_id)
-        if "error" in result:
-            return _err(result["error"], error_code="NOT_FOUND",
-                        entity_type="component", entity_id=component_id,
-                        suggestion="Call list_components to see valid component IDs.")
-        warnings: list[str] = []
-        if result.get("export_count", 0) == 0:
-            warnings.append(
-                "No public symbols found. Run post_edit_sync on this component's files "
-                "to populate the symbol index."
-            )
-        return _ok(result, warnings=warnings)
-    except Exception as e:
-        return _err(str(e), error_code="ERROR", entity_type="component", entity_id=component_id)
-
-
+@mcp.tool()
 def check_integrity(project_path: str) -> str:
     """
     Health check of the architecture model against the actual repository.
@@ -1796,6 +1110,7 @@ def check_integrity(project_path: str) -> str:
 import archmap.export as export_mod
 
 
+@mcp.tool()
 def export_architecture(project_path: str, format: str = "mermaid") -> str:
     """
     Export the architecture graph to a standard diagram format.
@@ -1825,6 +1140,7 @@ def export_architecture(project_path: str, format: str = "mermaid") -> str:
 import archmap.diff as diff_mod
 
 
+@mcp.tool()
 def snapshot_architecture(project_path: str, label: str = "") -> str:
     """
     Save a named snapshot of the current architecture state.
@@ -1850,6 +1166,7 @@ def snapshot_architecture(project_path: str, label: str = "") -> str:
         return _err(str(e))
 
 
+@mcp.tool()
 def diff_architecture(project_path: str, snapshot_label: str, snapshot_id: str = "") -> str:
     """
     Compare the current architecture against a previously saved snapshot.
@@ -1898,17 +1215,6 @@ def diff_architecture(project_path: str, snapshot_label: str, snapshot_id: str =
         return _err(str(e))
 
 
-def list_snapshots(project_path: str) -> str:
-    """
-    List all saved architecture snapshots for this project.
-    Returns: [{snapshot_id, label, created_at, component_count, dependency_count}]
-    """
-    try:
-        return _ok(diff_mod.list_snapshots(project_path))
-    except Exception as e:
-        return _err(str(e))
-
-
 # ─── Multi-agent collaboration ────────────────────────────────────────────────
 
 @mcp.tool()
@@ -1939,7 +1245,7 @@ def claim_component(
     Workflow:
       1. list_active_work()            ← check if anyone else is working here
       2. claim_component(actor, task)  ← announce your intent
-      3. get_generation_context()      ← get full context
+      3. get_context()      ← get full context
       4. ... generate and edit code ...
       5. post_edit_sync(validate=True)
       6. release_component(actor)      ← done
@@ -1956,6 +1262,7 @@ def claim_component(
         return _err(str(e))
 
 
+@mcp.tool()
 def release_component(project_path: str, component_id: str, actor: str) -> str:
     """
     Release your claim on a component when you are done working on it.
@@ -1968,21 +1275,6 @@ def release_component(project_path: str, component_id: str, actor: str) -> str:
     """
     try:
         return _ok(session_mod.release_component(project_path, component_id, actor))
-    except Exception as e:
-        return _err(str(e))
-
-
-def agent_heartbeat(project_path: str, actor: str, ttl_minutes: int = 30) -> str:
-    """
-    Refresh all active claims for this actor. Prevents claims from expiring
-    during long-running operations.
-
-    Call this every ~10 minutes if your task takes longer than the TTL.
-
-    Returns: {refreshed: int}  — number of claims whose TTL was extended.
-    """
-    try:
-        return _ok(session_mod.heartbeat(project_path, actor, ttl_minutes=ttl_minutes))
     except Exception as e:
         return _err(str(e))
 
@@ -2016,6 +1308,7 @@ def list_active_work(project_path: str) -> str:
         return _err(str(e))
 
 
+@mcp.tool()
 def get_changes_since(
     project_path: str,
     since: str,
@@ -2157,16 +1450,7 @@ def list_decisions(
         return _err(str(e))
 
 
-def get_decision(project_path: str, decision_id: str) -> str:
-    """Return a single ADR by its ID (e.g. 'adr_abc12345')."""
-    try:
-        return _ok(decisions_mod.get_decision(project_path, decision_id))
-    except KeyError as e:
-        return _err(str(e), error_code="NOT_FOUND", entity_type="decision", entity_id=decision_id)
-    except Exception as e:
-        return _err(str(e))
-
-
+@mcp.tool()
 def update_decision(
     project_path: str,
     decision_id: str,
@@ -2209,17 +1493,6 @@ def update_decision(
         return _err(str(e))
 
 
-def delete_decision(project_path: str, decision_id: str) -> str:
-    """
-    Permanently delete an ADR.
-    Prefer updating status to 'deprecated' or 'superseded' — decision history is valuable.
-    """
-    try:
-        return _ok(decisions_mod.delete_decision(project_path, decision_id))
-    except Exception as e:
-        return _err(str(e))
-
-
 # ─── Multi-level graph tools ──────────────────────────────────────────────────
 
 @mcp.tool()
@@ -2230,7 +1503,7 @@ def get_domain_map(project_path: str) -> str:
 
     This is the recommended FIRST call at the start of any agent session.
     It tells you: what domains exist, what data each owns, how they connect.
-    After this, drill into a domain with describe_node() or get_work_context().
+    After this, drill into a domain with describe_node() or get_context().
     """
     try:
         return _ok(ctx_mod.get_domain_map(project_path))
@@ -2253,60 +1526,6 @@ def describe_node(
     """
     try:
         return _ok(ctx_mod.describe_node(project_path, node_id, show_files))
-    except Exception as e:
-        return _err(str(e))
-
-
-@mcp.tool()
-def get_work_context(
-    project_path: str,
-    node_id: str,
-    task: str = "",
-) -> str:
-    """
-    Scope-isolated context for an agent about to work on a node.
-
-    Returns:
-      working_on        — node metadata (level, public_api, data_owned, stability)
-      i_own             — ALL files + symbols at full detail (my node + descendants)
-      i_consume         — upstream/sibling nodes shown as CONTRACTS ONLY (no source)
-      coordination_needed — callers that would break if the public interface changes
-      step_size         — atomic | local | bounded | service | cross
-      step_explanation  — why this step size was chosen
-      adr_recommended   — whether an Architecture Decision Record is warranted
-
-    This enforces context isolation: agents see their own code in full, and
-    other services only as the API surfaces they expose. Use this instead of
-    get_generation_context when the task is scoped to a specific node.
-    """
-    try:
-        return _ok(ctx_mod.get_work_context(project_path, node_id, task))
-    except Exception as e:
-        return _err(str(e))
-
-
-@mcp.tool()
-def get_change_surface(
-    project_path: str,
-    symbol_names: list[str],
-) -> str:
-    """
-    Symbol-level change impact analysis.
-
-    Given a list of symbol names, returns:
-      owners            — which components own these symbols + whether in public_api
-      affected_edges    — dependency edges that reference these symbols in interface_points
-      breaking_edge_count — edges with stability=stable that would break
-      touched_components — all components that need updating
-      step_size         — atomic | local | bounded | service | cross
-      recommended_update_order — topologically sorted update sequence
-      adr_recommended   — whether to write an ADR
-
-    Use BEFORE making any change that could affect multiple components.
-    Example: get_change_surface(["PlanItem", "create_plan_item"])
-    """
-    try:
-        return _ok(ctx_mod.get_change_surface(project_path, symbol_names))
     except Exception as e:
         return _err(str(e))
 
@@ -2482,7 +1701,7 @@ def promote_to_contract(
 
     Once promoted:
     - Future changes to these symbols trigger contract-break warnings
-    - Other agents see these symbols in get_work_context() as the component's interface
+    - Other agents see these symbols in get_context() as the component's interface
     - check_contract_break() will detect signature changes against these symbols
 
     Use after implementing a feature to declare its public surface.
@@ -2566,6 +1785,357 @@ def reset_graph(project_path: str) -> str:
     try:
         from archmap.store import reset_graph as _reset
         return _ok(_reset(project_path))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ─── Progressive knowledge tools ─────────────────────────────────────────────
+
+import archmap.completeness as completeness_mod
+import archmap.navigation as navigation_mod
+
+
+@mcp.tool()
+def get_knowledge_completeness(project_path: str, component_id: str = "") -> str:
+    """
+    Score how well-documented a component is in the knowledge graph (0–100).
+
+    The score reflects how much structural knowledge has been captured —
+    not code quality, but graph completeness:
+      description, declared contract, public_api, data_owned, mapped files,
+      synced symbols, quality score ≥80, accepted ADRs.
+
+    When quality_score is not yet fetched, the quality signal is omitted and
+    the remaining signals are renormalized to 100.
+
+    Args:
+        component_id: Component to score. Omit (or pass "") to score ALL nodes,
+                      sorted by score ascending (gaps first).
+
+    Returns (single):
+        {score, component_id, name, signals: {...}, missing: [...]}
+
+    Returns (all):
+        [{score, component_id, name, level, layer, missing}, ...]
+    """
+    try:
+        if component_id:
+            return _ok(completeness_mod.score_component(project_path, component_id))
+        return _ok(completeness_mod.score_all_components(project_path))
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def drill_into(project_path: str, task: str, start_id: str = "") -> str:
+    """
+    Navigate from a task description to the right component.
+
+    Uses keyword matching against component names, descriptions, and declared
+    contracts to suggest the best L2 → L3 → L4 path for the given task.
+    No ML — pure keyword overlap scoring.
+
+    Args:
+        task:     Free-text description of what you want to work on.
+                  Example: "add OAuth login", "fix cycle in graph store"
+        start_id: Optional — constrain search to descendants of this node
+                  (e.g. an L2 domain ID to narrow within one domain).
+
+    Returns:
+        {
+          path:                [{id, name, level, layer, score, why}],
+          suggested_component: {id, name, level, layer},
+          alternatives:        [{id, name, level, layer, score}],
+          query_tokens:        [str]
+        }
+    """
+    try:
+        return _ok(navigation_mod.drill_into(project_path, task, start_id))
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def get_knowledge_gaps(project_path: str, min_score: int = 70) -> str:
+    """
+    Surface underdocumented components, unmapped files, and stale symbols.
+
+    Use this to find where the knowledge graph is thin before starting a new
+    feature or onboarding a new agent. Gaps cause context truncation and
+    inaccurate impact analysis.
+
+    Args:
+        min_score: Components scoring below this completeness threshold are
+                   reported as gaps. Default 70.
+
+    Returns:
+        {
+          total_components:    int,
+          below_threshold:     int,
+          threshold:           int,
+          gaps:                [{component_id, name, level, layer, score, missing}],
+          unmapped_source_files: [str],
+          stale_symbols:       [{file_path, issue}]
+        }
+    """
+    try:
+        return _ok(navigation_mod.get_knowledge_gaps(project_path, min_score))
+    except Exception as e:
+        return _err(str(e))
+
+
+# ─── Hierarchical task tools ──────────────────────────────────────────────────
+
+@mcp.tool()
+def add_task(
+    project_path: str,
+    title: str,
+    description: str = "",
+    component_id: str = "",
+    parent_task_id: str = "",
+    priority: str = "medium",
+    created_by: str = "agent",
+    expects_files_added: list[str] = [],
+    expects_files_modified: list[str] = [],
+    expects_symbols_added: list[str] = [],
+    expects_symbols_removed: list[str] = [],
+    expects_dependencies_added: list[str] = [],
+    tags: list[str] = [],
+) -> str:
+    """
+    Create a task, optionally as a child of an existing task.
+
+    Tasks mirror the node hierarchy: root tasks are user requirements; agents
+    decompose them into sub-tasks scoped to progressively finer components.
+    The depth is not hardcoded — agents decide how deep to go.
+
+    Args:
+        title:                      Short imperative description.
+        description:                Full context, acceptance criteria, design notes.
+        component_id:               Node this task is scoped to. Empty = unlinked.
+        parent_task_id:             Parent task ID. Empty = root requirement.
+        priority:                   low | medium | high | critical
+        created_by:                 Actor identity (orchestrator, worker agent name, human).
+        expects_files_added:        Files that should exist in graph when done.
+        expects_files_modified:     Files that should be updated in graph when done.
+        expects_symbols_added:      Symbol names that should appear in graph when done.
+        expects_symbols_removed:    Symbol names that should be gone when done.
+        expects_dependencies_added: "comp_a → comp_b" pairs to add.
+        tags:                       Arbitrary labels.
+
+    Returns the full task record including its generated ID.
+    """
+    try:
+        expects = {
+            "files_added":        expects_files_added,
+            "files_modified":     expects_files_modified,
+            "symbols_added":      expects_symbols_added,
+            "symbols_removed":    expects_symbols_removed,
+            "dependencies_added": expects_dependencies_added,
+            "contract_changes":   {},
+        }
+        return _ok(plan_mod.add_task(
+            project_path,
+            title=title,
+            description=description,
+            component_id=component_id or None,
+            parent_task_id=parent_task_id or None,
+            priority=priority,
+            created_by=created_by,
+            expects=expects,
+            tags=tags,
+        ))
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def decompose_task(
+    project_path: str,
+    parent_task_id: str,
+    subtasks: list[dict],
+    created_by: str = "agent",
+) -> str:
+    """
+    Decompose a task into subtasks in a single call — the core orchestration primitive.
+
+    Each subtask dict may contain:
+      title (required), description, component_id, priority,
+      tags, expects (same structure as add_task expects_* fields but as a nested dict).
+
+    Typical orchestrator pattern:
+      1. Receive high-level task from user
+      2. Call get_domain_map() to understand the architecture
+      3. Call decompose_task() to create worker-level subtasks on specific components
+      4. Workers call get_context(component_id=...) + implement + complete_task()
+
+    Multi-agent pattern:
+      - Orchestrator calls decompose_task() to create one subtask per worker
+      - Each worker claims its subtask via claim_component(), does the work, completes it
+      - Orchestrator polls get_task_tree() to track overall progress
+      - When all subtasks done, parent auto-completes
+
+    Args:
+        parent_task_id: Task to break down.
+        subtasks:       List of subtask descriptors.
+        created_by:     Actor performing decomposition (usually "orchestrator").
+
+    Returns:
+        {parent: task_record, created: [task_record, ...]}
+    """
+    try:
+        return _ok(plan_mod.decompose_task(project_path, parent_task_id, subtasks, created_by))
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def complete_task(
+    project_path: str,
+    task_id: str,
+    completed_by: str = "agent",
+    note: str = "",
+) -> str:
+    """
+    Mark a task done and propagate progress up the task tree.
+
+    When all subtasks of a parent are done, the parent is auto-completed.
+    Call this after post_edit_sync confirms the graph is up to date.
+
+    Recommended workflow:
+      1. Implement the change
+      2. post_edit_sync(file_paths=[...])
+      3. check_task_drift(task_id)     ← verify expects were met
+      4. complete_task(task_id)        ← close and propagate
+
+    Args:
+        task_id:      Task to complete.
+        completed_by: Actor identity (worker agent name, human).
+        note:         Optional completion note appended to description.
+
+    Returns:
+        {task, parent_updated: bool, parents_auto_completed: [task_id]}
+    """
+    try:
+        return _ok(plan_mod.complete_task(project_path, task_id, completed_by, note))
+    except KeyError as e:
+        return _err(str(e), error_code="NOT_FOUND")
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def get_task_tree(
+    project_path: str,
+    task_id: str,
+) -> str:
+    """
+    Return a task and all its descendants as a nested tree.
+
+    Use this for orchestrators to track overall progress across all workers,
+    or for users to see the full decomposition of a requirement.
+
+    Returns:
+        {task fields..., children: [{task fields..., children: [...]}, ...]}
+    """
+    try:
+        return _ok(plan_mod.get_task_tree(project_path, task_id))
+    except KeyError as e:
+        return _err(str(e), error_code="NOT_FOUND")
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def check_task_drift(
+    project_path: str,
+    task_id: str,
+) -> str:
+    """
+    Compare a task's `expects` specification against actual graph state.
+
+    Run this after post_edit_sync to confirm implementation matches the promise.
+    If drift=true, the expected symbols/files/deps are not yet in the graph —
+    either the sync is incomplete or the implementation didn't match the plan.
+
+    Returns:
+        {
+          task_id, title, expects, drift: bool,
+          drift_items: ["symbols not found: login, logout", ...],
+          actual: {symbols_found, symbols_missing, files_found, files_missing,
+                   deps_found, deps_missing}
+        }
+    """
+    try:
+        return _ok(plan_mod.check_task_drift(project_path, task_id))
+    except KeyError as e:
+        return _err(str(e), error_code="NOT_FOUND")
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def list_tasks(
+    project_path: str,
+    component_id: str = "",
+    parent_task_id: str = "_root_",
+    status: str = "",
+    priority: str = "",
+    include_subtasks: bool = False,
+) -> str:
+    """
+    List tasks with optional filtering.
+
+    Args:
+        component_id:    Filter to tasks scoped to this component.
+        parent_task_id:  "_root_" (default) = only top-level requirements.
+                         "" = all tasks regardless of depth.
+                         A task_id = direct children of that task.
+        status:          todo | in_progress | done | blocked | cancelled
+        priority:        low | medium | high | critical
+        include_subtasks: When parent_task_id is a task ID, also include all
+                          descendants (not just direct children).
+    """
+    try:
+        return _ok(plan_mod.list_tasks(
+            project_path,
+            component_id=component_id or None,
+            parent_task_id=parent_task_id if parent_task_id != "" else None,
+            status=status or None,
+            priority=priority or None,
+            include_subtasks=include_subtasks,
+        ))
+    except Exception as e:
+        return _err(str(e))
+
+
+@mcp.tool()
+def update_task(
+    project_path: str,
+    task_id: str,
+    title: str = "",
+    description: str = "",
+    status: str = "",
+    priority: str = "",
+    component_id: str = "",
+) -> str:
+    """
+    Update mutable task fields.
+
+    Status values: todo | in_progress | done | blocked | cancelled
+    Use complete_task() instead of setting status=done manually — it propagates
+    progress to parent tasks.
+    """
+    try:
+        kwargs = {}
+        if title:        kwargs["title"]        = title
+        if description:  kwargs["description"]   = description
+        if status:       kwargs["status"]        = status
+        if priority:     kwargs["priority"]      = priority
+        if component_id: kwargs["component_id"]  = component_id
+        return _ok(plan_mod.update_task(project_path, task_id, **kwargs))
+    except KeyError as e:
+        return _err(str(e), error_code="NOT_FOUND")
     except Exception as e:
         return _err(str(e))
 

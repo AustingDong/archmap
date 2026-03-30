@@ -25,6 +25,8 @@ from typing import Optional, List
 import uvicorn
 
 import archmap.architecture as arch_mod
+import archmap.completeness as completeness_mod
+import archmap.navigation as navigation_mod
 import archmap.audit as audit_mod
 import archmap.cognition as cognition_mod
 import archmap.context as ctx_mod
@@ -314,15 +316,7 @@ async def reset_graph(project_path: str):
 @app.get("/api/architecture")
 async def get_architecture(project_path: str):
     try:
-        result = await _run_sync(arch_mod.get_architecture, project_path)
-        # Auto-start the file watcher for this project on first load.
-        # Runs in background — failure is non-fatal (watchdog may not be installed).
-        try:
-            from archmap.watcher import start_watcher as _start_w
-            await _run_sync(_start_w, project_path, _on_file_synced)
-        except Exception:
-            pass
-        return result
+        return await _run_sync(arch_mod.get_architecture, project_path)
     except ArchMapError as e:
         raise HTTPException(400, str(e))
 
@@ -475,8 +469,12 @@ async def unmap_file(project_path: str, file_path: str):
 async def list_plan_items(project_path: str, component_id: str = "", status: str = "", priority: str = ""):
     try:
         return await _run_sync(
-            plan_mod.list_plan_items, project_path,
-            component_id or None, status or None, priority or None,
+            lambda: plan_mod.list_plan_items(
+                project_path,
+                component_id=component_id or None,
+                status=status or None,
+                priority=priority or None,
+            )
         )
     except ArchMapError as e:
         raise HTTPException(400, str(e))
@@ -648,6 +646,17 @@ async def search_symbol(project_path: str, q: str = ""):
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/context/{component_id}")
+async def get_context(component_id: str, project_path: str, task: str = "", depth: str = "implement"):
+    """Unified agent context. depth: orient|plan|implement (controls response size)."""
+    try:
+        return await _run_sync(ctx_mod.get_context, project_path, component_id, task, depth)
+    except NotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/coding-context/{component_id}")
 async def get_coding_context(component_id: str, project_path: str):
     """
@@ -665,7 +674,7 @@ async def get_coding_context(component_id: str, project_path: str):
     try:
         files = await _run_sync(map_mod.list_component_files, project_path, component_id)
         arch = await _run_sync(arch_mod.get_architecture, project_path)
-        items = await _run_sync(plan_mod.list_plan_items, project_path, component_id, None, None)
+        items = await _run_sync(lambda: plan_mod.list_plan_items(project_path, component_id=component_id))
     except ArchMapError as e:
         raise HTTPException(400, str(e))
 
@@ -708,23 +717,6 @@ async def find_related(project_path: str, q: str = ""):
         return await _run_sync(intel_mod.find_related, project_path, q)
     except ArchMapError as e:
         raise HTTPException(400, str(e))
-
-@app.get("/api/symbols/index")
-async def get_symbol_index(project_path: str):
-    """Complete symbol-to-file-to-component index for the project."""
-    try:
-        return await _run_sync(intel_mod.get_symbol_index, project_path)
-    except ArchMapError as e:
-        raise HTTPException(400, str(e))
-
-@app.get("/api/architecture/trace")
-async def trace_path(project_path: str, from_id: str, to_id: str):
-    """BFS shortest dependency path between two components."""
-    try:
-        return await _run_sync(intel_mod.trace_path, project_path, from_id, to_id)
-    except ArchMapError as e:
-        raise HTTPException(400, str(e))
-
 
 # ─── File content + symbol extraction ────────────────────────────────────────
 
@@ -991,7 +983,7 @@ async def call_tool_legacy(tool: str, body: ToolCall):
         if tool == "get_dependency_graph":
             return await _run_sync(arch_mod.get_dependency_graph, p["project_path"])
         if tool == "list_plan_items":
-            return await _run_sync(plan_mod.list_plan_items, p["project_path"], p.get("component_id") or None, p.get("status") or None)
+            return await _run_sync(lambda: plan_mod.list_plan_items(p["project_path"], component_id=p.get("component_id") or None, status=p.get("status") or None))
         if tool == "update_plan_item":
             kw = {k: v for k, v in p.items() if k not in ("project_path", "item_id") and v is not None}
             return await _run_sync(plan_mod.update_plan_item, p["project_path"], p["item_id"], **kw)
@@ -1006,19 +998,6 @@ async def call_tool_legacy(tool: str, body: ToolCall):
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, str(e))
-
-
-def _on_file_synced(updated_mapping: dict) -> None:
-    """Called by the file watcher when a mapped file's symbols are refreshed."""
-    _notify("mappings_changed", {"file_path": updated_mapping.get("file_path", "")})
-
-
-@app.post("/api/watcher/start")
-async def start_watcher(project_path: str):
-    """Start the background file watcher for a project. Auto-syncs symbols on file save."""
-    from archmap.watcher import start_watcher as _start
-    started = await _run_sync(_start, project_path, _on_file_synced)
-    return {"watching": started, "project_path": project_path}
 
 
 # ─── Decisions (ADRs) ─────────────────────────────────────────────────────────
@@ -1101,16 +1080,6 @@ async def get_work_context(node_id: str, project_path: str, task: str = ""):
     """Scope-isolated context: full detail for owned files + contract-only for consumed nodes."""
     try:
         return await _run_sync(ctx_mod.get_work_context, project_path, node_id, task)
-    except ArchMapError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.get("/api/change-surface")
-async def get_change_surface(project_path: str, symbols: str = ""):
-    """Impact analysis at symbol level: which components/edges break if these symbols change."""
-    try:
-        sym_list = [s.strip() for s in symbols.split(",") if s.strip()]
-        return await _run_sync(ctx_mod.get_change_surface, project_path, sym_list)
     except ArchMapError as e:
         raise HTTPException(400, str(e))
 
@@ -1236,6 +1205,161 @@ async def migrate_multilevel(req: MigrateReq):
         result = await _run_sync(migration_mod.bootstrap_multilevel_graph, req.project_path)
         _notify("architecture_changed")
         return result
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── Hierarchical task endpoints ─────────────────────────────────────────────
+
+@app.post("/api/tasks")
+async def api_add_task(body: dict):
+    """Create a task (root or child). Body: title, description, component_id, parent_task_id, priority, created_by, expects, tags."""
+    try:
+        project_path = body.get("project_path", "")
+        return await _run_sync(
+            plan_mod.add_task,
+            project_path,
+            title=body.get("title", ""),
+            description=body.get("description", ""),
+            component_id=body.get("component_id") or None,
+            parent_task_id=body.get("parent_task_id") or None,
+            priority=body.get("priority", "medium"),
+            created_by=body.get("created_by", "user"),
+            expects=body.get("expects"),
+            tags=body.get("tags"),
+        )
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/tasks/{task_id}/decompose")
+async def api_decompose_task(task_id: str, body: dict):
+    """Decompose a task into subtasks. Body: project_path, subtasks: [...], created_by."""
+    try:
+        project_path = body.get("project_path", "")
+        return await _run_sync(
+            plan_mod.decompose_task,
+            project_path, task_id,
+            body.get("subtasks", []),
+            body.get("created_by", "user"),
+        )
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/tasks/{task_id}/complete")
+async def api_complete_task(task_id: str, body: dict):
+    """Complete a task and propagate progress. Body: project_path, completed_by, note."""
+    try:
+        project_path = body.get("project_path", "")
+        return await _run_sync(
+            plan_mod.complete_task,
+            project_path, task_id,
+            body.get("completed_by", "user"),
+            body.get("note", ""),
+        )
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/tasks/{task_id}/tree")
+async def api_get_task_tree(task_id: str, project_path: str):
+    """Return task and all descendants as a nested tree."""
+    try:
+        return await _run_sync(plan_mod.get_task_tree, project_path, task_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/tasks/{task_id}/drift")
+async def api_check_task_drift(task_id: str, project_path: str):
+    """Compare task expects against current graph state."""
+    try:
+        return await _run_sync(plan_mod.check_task_drift, project_path, task_id)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/tasks")
+async def api_list_tasks(
+    project_path: str,
+    component_id: str = "",
+    parent_task_id: str = "_root_",
+    status: str = "",
+    priority: str = "",
+    include_subtasks: bool = False,
+):
+    """List tasks with optional filtering."""
+    try:
+        return await _run_sync(
+            plan_mod.list_tasks, project_path,
+            component_id=component_id or None,
+            parent_task_id=parent_task_id if parent_task_id != "" else None,
+            status=status or None,
+            priority=priority or None,
+            include_subtasks=include_subtasks,
+        )
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.patch("/api/tasks/{task_id}")
+async def api_update_task(task_id: str, body: dict):
+    """Update mutable task fields."""
+    try:
+        project_path = body.pop("project_path", "")
+        return await _run_sync(plan_mod.update_task, project_path, task_id, **{
+            k: v for k, v in body.items()
+            if k in {"title", "description", "status", "priority", "component_id", "expects", "tags"}
+        })
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+# ─── Progressive knowledge endpoints ─────────────────────────────────────────
+
+@app.get("/api/completeness/{component_id}")
+async def get_completeness_single(component_id: str, project_path: str):
+    """Completeness score for a single component (0–100)."""
+    try:
+        return await _run_sync(completeness_mod.score_component, project_path, component_id)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/completeness")
+async def get_completeness_all(project_path: str):
+    """Completeness scores for all components, sorted ascending (gaps first)."""
+    try:
+        return await _run_sync(completeness_mod.score_all_components, project_path)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/drill-into")
+async def get_drill_into(project_path: str, task: str, start_id: str = ""):
+    """Suggest the best L2→L4 component path for a task description."""
+    try:
+        return await _run_sync(navigation_mod.drill_into, project_path, task, start_id)
+    except ArchMapError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/knowledge-gaps")
+async def get_knowledge_gaps(project_path: str, min_score: int = 70):
+    """Surface underdocumented components, unmapped files, and stale symbols."""
+    try:
+        return await _run_sync(navigation_mod.get_knowledge_gaps, project_path, min_score)
     except ArchMapError as e:
         raise HTTPException(400, str(e))
 

@@ -194,12 +194,6 @@ export const describeArchitecture = (project_path: string, level?: number) =>
 export const findRelated = (project_path: string, q: string) =>
   get<import('../types').RelatedSearchResult>(`${BASE}/architecture/search`, { project_path, q })
 
-export const getSymbolIndex = (project_path: string) =>
-  get<import('../types').SymbolIndexEntry[]>(`${BASE}/symbols/index`, { project_path })
-
-export const tracePath = (project_path: string, from_id: string, to_id: string) =>
-  get<import('../types').PathTrace>(`${BASE}/architecture/trace`, { project_path, from_id, to_id })
-
 // ─── Multi-level graph ────────────────────────────────────────────────────────
 
 export const getDomainMap = (project_path: string) =>
@@ -215,11 +209,6 @@ export const listChildren = (project_path: string, parent_id: string) =>
 
 export const getWorkContext = (project_path: string, node_id: string, task = '') =>
   get<import('../types').WorkContext>(`${BASE}/work-context/${node_id}`, { project_path, task })
-
-export const getChangeSurface = (project_path: string, symbols: string[]) =>
-  get<import('../types').ChangeSurface>(`${BASE}/change-surface`, {
-    project_path, symbols: symbols.join(','),
-  })
 
 // ─── Contracts ────────────────────────────────────────────────────────────────
 
@@ -268,6 +257,83 @@ export const remapFiles = (project_path: string, file_paths: string[], target_co
   post<{ remapped: string[]; not_found: string[]; target: string }>('/mappings/remap', {
     project_path, file_paths, target_component_id,
   })
+
+// ─── Health data ──────────────────────────────────────────────────────────────
+
+export const getCycles = (project_path: string) =>
+  get<{
+    cycle_count: number
+    cycles: Array<{
+      component_id: string
+      component_name: string
+      layer: string
+      cycles_with: Array<{ component_id: string; component_name: string; layer: string }>
+    }>
+  }>(`${BASE}/cycles`, { project_path })
+
+export const getValidate = (project_path: string) =>
+  get<{
+    valid: boolean
+    violations: Array<{
+      rule_id: string
+      rule_type: string
+      message: string
+      from_component: string
+      from_name: string
+      to_component: string
+      to_name: string
+    }>
+  }>(`${BASE}/validate`, { project_path })
+
+export const getCodeQuality = (project_path: string, component_id: string) =>
+  get<{
+    component_id: string
+    score: number
+    error_count: number
+    warning_count: number
+    issue_count: number
+    summary: string
+    hotspots: string[]
+    fix_priority: string[]
+    files: Array<{ file_path: string; lines: number; complexity: number; lint_issues: unknown[]; format_ok: boolean }>
+  }>(`${BASE}/quality/${component_id}`, { project_path })
+
+// ─── Progressive knowledge ────────────────────────────────────────────────────
+
+export type CompletenessScore = {
+  score: number
+  component_id: string
+  name: string
+  level?: number
+  layer?: string
+  missing: string[]
+}
+
+export const getCompleteness = (project_path: string) =>
+  get<CompletenessScore[]>(`${BASE}/completeness`, { project_path })
+
+export const getCompletenessForComponent = (project_path: string, component_id: string) =>
+  get<CompletenessScore & { signals: Record<string, boolean | null> }>(
+    `${BASE}/completeness/${component_id}`, { project_path }
+  )
+
+export const drillInto = (project_path: string, task: string, start_id = '') =>
+  get<{
+    path: Array<{ id: string; name: string; level: number; layer: string; score: number; why: string }>
+    suggested_component: { id: string; name: string; level: number; layer: string }
+    alternatives: Array<{ id: string; name: string; level: number; layer: string; score: number }>
+    query_tokens: string[]
+  }>(`${BASE}/drill-into`, { project_path, task, start_id })
+
+export const getKnowledgeGaps = (project_path: string, min_score = 70) =>
+  get<{
+    total_components: number
+    below_threshold: number
+    threshold: number
+    gaps: CompletenessScore[]
+    unmapped_source_files: string[]
+    stale_symbols: Array<{ file_path: string; issue: string }>
+  }>(`${BASE}/knowledge-gaps`, { project_path, min_score: String(min_score) })
 
 // ─── Migration ────────────────────────────────────────────────────────────────
 

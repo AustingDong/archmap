@@ -28,23 +28,29 @@ release_component(project_path="...", component_id="<comp_id>", actor="claude-co
 
 ---
 
-## Before generating or editing code (primary entry point)
+## Standard agent workflow
 
 ```
-get_generation_context(
+# 1. Orient — start of every session
+get_domain_map(project_path="C:/Users/a7don/my_projects/archmap")
+describe_architecture(project_path="C:/Users/a7don/my_projects/archmap")
+
+# 2. Before editing a component — REQUIRED
+get_context(
     project_path="C:/Users/a7don/my_projects/archmap",
     component_id="<comp_id>",
-    task="<what you are about to generate>"
+    task="<what you are about to do>"
 )
-```
-One call returns: files + symbols, public interface, blast radius, open tasks,
-applicable architectural rules, and a `generation_brief` field ready to inject
-directly into a code generation prompt. Use this before touching any file.
+# Returns: files + symbols, contracts, impact, quality, tasks, rules, ADRs.
+# Quality score must not decrease after your changes.
 
-For broad orientation first:
-```
-describe_architecture(project_path="C:/Users/a7don/my_projects/archmap")
-find_related(project_path="...", query="<keyword>")
+# 3. After editing files — REQUIRED
+post_edit_sync(project_path="...", file_paths=["..."], reinfer_dependencies=True)
+check_code_quality(project_path="...", component_id="<comp_id>")
+
+# 4. Search — locate things without reading files
+search(project_path="...", query="<keyword>")             # components/files/symbols
+search_symbol(project_path="...", query="<fn name>")      # symbol-level lookup
 ```
 
 ---
@@ -253,18 +259,18 @@ Use `find_related(query="store")` to locate the right ID by name.
 
 ---
 
-## Automatic vs manual sync
+## Sync is always explicit — nothing is automatic
 
-| What | Automatic | Manual |
-|------|-----------|--------|
-| Symbol sync for existing files | File watcher (when UI open) | `post_edit_sync` |
-| Symbol sync via MCP | Never | `post_edit_sync` — always call |
-| New file mapping | Never | `map_file` + `post_edit_sync` |
-| Dependency re-inference | Never | `post_edit_sync(reinfer_dependencies=True)` |
-| Architecture description | Always current | — |
+All graph updates require explicit agent action. There is no background sync.
 
-**Always call `post_edit_sync` after editing via MCP.** The file watcher only updates
-the UI graph, not the MCP symbol index.
+| What | How |
+|------|-----|
+| Symbol sync | `post_edit_sync(file_paths=[...])` — call after every edit |
+| New file mapping | `post_edit_sync` returns `unmapped` list → call `map_file` for each |
+| Dependency re-inference | `post_edit_sync(reinfer_dependencies=True)` — only when imports changed |
+| Architecture description | Always current (read from graph files directly) |
+
+**If you skip `post_edit_sync`, the graph drifts. There is no fallback.**
 
 ---
 

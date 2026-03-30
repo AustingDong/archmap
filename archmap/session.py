@@ -260,10 +260,3 @@ def list_active_work(project_path: str) -> dict:
     }
 
 
-def get_component_owners(project_path: str, component_id: str) -> list[dict]:
-    """
-    Return all active claims on a specific component.
-    Useful for a targeted check before starting work on one component.
-    """
-    work = list_active_work(project_path)
-    return [c for c in work["claims"] if c["component_id"] == component_id]

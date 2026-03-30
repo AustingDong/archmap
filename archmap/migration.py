@@ -253,8 +253,8 @@ def bootstrap_multilevel_graph(project_path: str) -> dict:
         {
             "name": "Scanner",
             "description": "Auto-detection: scans project directories, infers component membership, extracts imports to infer dependencies.",
-            "files": ["archmap/scanner.py", "archmap/inference.py", "archmap/watcher.py"],
-            "public_api": ["scan_project", "infer_dependencies", "confirm_dependency", "start_watcher", "stop_watcher"],
+            "files": ["archmap/scanner.py", "archmap/inference.py"],
+            "public_api": ["scan_project", "infer_dependencies", "confirm_dependency"],
             "data_owned": [],
             "color": "#0ea5e9",
         },
