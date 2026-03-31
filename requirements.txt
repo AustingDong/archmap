@@ -1,6 +1,9 @@
+# Core dependencies — also declared in pyproject.toml
 mcp[cli]>=1.0.0
 fastapi>=0.111.0
 uvicorn>=0.29.0
-watchdog>=4.0.0
+
+# Dev/test
+pytest>=8.0.0
 ruff>=0.4.0
 mypy>=1.9.0

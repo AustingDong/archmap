@@ -28,4 +28,5 @@ from archmap.proposals import (  # noqa: F401
 # Context & rendering
 from archmap.context import (  # noqa: F401
     get_context, render_tree, detect_drift, suggest_files,
+    get_brief_context, update_file_snapshot,
 )

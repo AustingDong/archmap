@@ -1,9 +1,9 @@
-# ArchMap v2 — Purpose Tree
+# ArchMap — Purpose Tree
 
 ArchMap is a progressive comprehension tool: a purpose tree where depth = abstraction.
 Agents propose grey nodes; users review and approve. Tasks use a stack (LIFO) for depth-first pacing.
 
-Project path for all tool calls: `C:/Users/a7don/my_projects/archmap`
+**Project path**: Use the absolute path to this repository for all tool calls.
 
 ---
 
@@ -14,10 +14,10 @@ See `.claude/skills/work-task/SKILL.md` for the full workflow, or use `/work-tas
 
 **Quick reference:**
 
-1. `orient(project_path="C:/Users/a7don/my_projects/archmap")` — first action, always
-2. `get_task(project_path="C:/Users/a7don/my_projects/archmap")` — get your assignment
+1. `orient(project_path="<this repo>")` — first action, always
+2. `get_task(project_path="<this repo>")` — get your assignment
 3. Do the work: decompose (propose children) or implement (write code + attach files)
-4. `report(project_path="C:/Users/a7don/my_projects/archmap", ...)` — last action, always
+4. `report(project_path="<this repo>", ...)` — last action, always
 
 If the user asks for something else, do that instead. But still orient first, report last.
 
@@ -59,7 +59,7 @@ archmap/
   tree_crud.py     Node CRUD + file attachment
   tasks.py         Task stack (LIFO create, activate, complete, reject)
   proposals.py     Propose/approve/reject (agent gate)
-  context.py       Agent context serialization + ASCII rendering
+  context.py       Agent context serialization + ASCII rendering + hooks
   tree.py          Barrel re-export
 
 api_server.py      FastAPI REST server (port 8765)
@@ -87,15 +87,18 @@ ui/src/
 ## Running
 
 ```bash
+# Install
+pip install -e .
+
 # API server (port 8765)
-conda run -n archmap python api_server.py
+python api_server.py
 
 # React UI (port 5174)
-cd ui && npm run dev
+cd ui && npm install && npm run dev
 
 # MCP server (stdio, configured in .mcp.json)
 python mcp_server.py
 
 # Tests
-conda run -n archmap python -m pytest tests/ -v
+python -m pytest tests/ -v
 ```
