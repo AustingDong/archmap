@@ -13,13 +13,22 @@ def main():
         if not file_path:
             return
 
-        project_path = os.environ.get("CLAUDE_PROJECT_DIR", "")
+        # Use cwd from hook input (the project being worked on),
+        # then CLAUDE_PROJECT_DIR, then derive from script location
+        project_path = data.get("cwd", "")
         if not project_path:
-            # Derive from hook script location: .claude/hooks/ → project root
+            project_path = os.environ.get("CLAUDE_PROJECT_DIR", "")
+        if not project_path:
             project_path = str(Path(__file__).resolve().parent.parent.parent)
 
-        if project_path not in sys.path:
-            sys.path.insert(0, project_path)
+        # Ensure archmap is importable
+        archmap_root = str(Path(__file__).resolve().parent.parent.parent)
+        if archmap_root not in sys.path:
+            sys.path.insert(0, archmap_root)
+
+        from archmap.core.store import is_initialized
+        if not is_initialized(project_path):
+            return
 
         from archmap.context import get_brief_context
 
