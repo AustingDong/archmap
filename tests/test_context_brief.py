@@ -30,8 +30,7 @@ def test_brief_context_mapped_file():
     attach_files(p, sibling.id, ["db.py"])
 
     result = get_brief_context(p, str(fp))
-    assert "[ArchMap] auth.py" in result
-    assert "Auth" in result
+    assert "[ArchMap] auth.py -> Auth" in result
     assert "MyApp > Backend > Auth" in result
     assert "Authentication and authorization" in result
     assert "Database (db.py)" in result

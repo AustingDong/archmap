@@ -126,7 +126,7 @@ def get_brief_context(project_path: str, file_path: str) -> str:
     filename = Path(norm).name
     breadcrumb = " > ".join(n.name for n in path)
 
-    lines = [f"[ArchMap] {filename} → {node.name}"]
+    lines = [f"[ArchMap] {filename} -> {node.name}"]
     lines.append(f"Branch: {breadcrumb}")
 
     if node.description:
