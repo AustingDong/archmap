@@ -1,51 +1,43 @@
 {
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'ArchMap: You modified files. Call report() with files_touched before responding to the user.'"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python C:/Users/a7don/my_projects/archmap/.claude/check_task.py"
+          }
+        ]
+      }
+    ]
+  },
   "permissions": {
     "allow": [
       "Bash(cd:*)",
       "Bash(conda run:*)",
-      "Bash(claude mcp:*)",
-      "mcp__archmap__get_architecture",
-      "mcp__archmap__list_components",
-      "mcp__archmap__delete_component",
-      "mcp__archmap__add_component",
-      "mcp__archmap__add_dependency",
-      "mcp__archmap__bulk_map",
-      "mcp__archmap__create_plan_item",
-      "mcp__archmap__update_plan_item",
-      "mcp__archmap__list_plan_items",
-      "mcp__archmap__map_file",
-      "mcp__ide__getDiagnostics",
-      "Bash(curl:*)",
       "Bash(python:*)",
-      "Bash(netstat:*)",
       "Bash(node:*)",
       "Bash(npm install:*)",
-      "Bash(for id:*)",
-      "WebSearch",
-      "WebFetch(domain:reactflow.dev)",
-      "WebFetch(domain:github.com)",
-      "WebFetch(domain:medium.com)",
-      "WebFetch(domain:blog.logrocket.com)",
-      "mcp__archmap__project_status",
-      "Bash(find:*)",
-      "mcp__archmap__list_all_mappings",
-      "mcp__archmap__unmap_file",
-      "Bash(npx tsc:*)",
-      "Bash(cd ui:*)",
-      "Bash(./node_modules/.bin/tsc --noEmit 2>&1)",
-      "mcp__archmap__list_component_files",
-      "mcp__archmap__describe_architecture",
-      "mcp__archmap__find_related",
-      "mcp__archmap__read_function",
-      "mcp__archmap__get_coding_context",
-      "mcp__archmap__remove_dependency",
-      "Bash(pip install:*)",
-      "Bash(ui/node_modules/.bin/tsc --noEmit -p ui/tsconfig.app.json 2>&1)",
       "Bash(ls:*)",
-      "WebFetch(domain:sourcegraph.com)",
-      "WebFetch(domain:deusdata.github.io)",
-      "WebFetch(domain:mcpmarket.com)",
-      "WebFetch(domain:mcpstore.co)"
+      "Bash(curl:*)",
+      "Bash(npx tsc:*)",
+      "Bash(pip install:*)",
+      "mcp__archmap__orient",
+      "mcp__archmap__get_task",
+      "mcp__archmap__report",
+      "WebSearch"
     ]
   }
 }

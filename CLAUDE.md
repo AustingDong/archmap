@@ -1,293 +1,101 @@
-# ArchMap — Agent Workflow Guide
+# ArchMap v2 — Purpose Tree
 
-ArchMap maintains a live knowledge graph of this codebase: components, dependencies,
-file-to-component mappings, symbols, tasks, and architectural rules. **Use the MCP
-tools below instead of reading source files directly wherever possible.** The graph
-gives faster, structured answers than grepping.
+ArchMap is a progressive comprehension tool: a purpose tree where depth = abstraction.
+Agents propose grey nodes; users review and approve. Tasks use a stack (LIFO) for depth-first pacing.
 
 Project path for all tool calls: `C:/Users/a7don/my_projects/archmap`
 
 ---
 
-## Multi-agent collaboration (when sharing the project)
+## REQUIRED: Agent workflow
+
+Every session MUST follow the orient → get_task → work → report loop.
+See `.claude/skills/work-task/SKILL.md` for the full workflow, or use `/work-task`.
+
+**Quick reference:**
+
+1. `orient(project_path="C:/Users/a7don/my_projects/archmap")` — first action, always
+2. `get_task(project_path="C:/Users/a7don/my_projects/archmap")` — get your assignment
+3. Do the work: decompose (propose children) or implement (write code + attach files)
+4. `report(project_path="C:/Users/a7don/my_projects/archmap", ...)` — last action, always
+
+If the user asks for something else, do that instead. But still orient first, report last.
+
+---
+
+## MCP Tools (3 tools)
+
+| Tool | What it does |
+|------|-------------|
+| `orient` | See the purpose tree + active task info |
+| `get_task` | Get active task with scoped context (breadcrumb, siblings, children) |
+| `report` | Report work done: propose grey nodes, propose removals, create tasks |
+
+Full tool reference: `.claude/skills/work-task/references/mcp-tools.md`
+
+---
+
+## Skills
+
+| Skill | When to use |
+|-------|------------|
+| `/work-task` | Core workflow: orient, get task, decompose or implement, report |
+| `/bootstrap-arch` | Fresh project: read codebase and propose initial tree structure |
+
+Detailed references in `.claude/skills/work-task/references/`:
+- `workflow.md` — Stack-based depth-first pacing explained
+- `tree-model.md` — Node statuses, file ownership, depth guidelines
+- `mcp-tools.md` — orient, get_task, report parameter reference
+
+---
+
+## Architecture
 
 ```
-# Check who is working on what — always do this first
-list_active_work(project_path="C:/Users/a7don/my_projects/archmap")
+archmap/
+  core/
+    models.py      TreeNode + Task dataclasses
+    store.py       Atomic JSON persistence (tree.json, tasks.json)
+  tree_crud.py     Node CRUD + file attachment
+  tasks.py         Task stack (LIFO create, activate, complete, reject)
+  proposals.py     Propose/approve/reject (agent gate)
+  context.py       Agent context serialization + ASCII rendering
+  tree.py          Barrel re-export
 
-# Claim before working
-claim_component(project_path="...", component_id="<comp_id>",
-                actor="claude-code", task="<what you are doing>")
+api_server.py      FastAPI REST server (port 8765)
+mcp_server.py      3-tool MCP server for agent interaction
 
-# Poll for changes from other agents/humans (~every 60s)
-get_changes_since(project_path="...", since="<last_response_timestamp>")
-
-# Release when done
-release_component(project_path="...", component_id="<comp_id>", actor="claude-code")
+ui/src/
+  App.tsx          Collapsible tree UI + task panel
+  api/archMapApi.ts  API client
+  types.ts         TypeScript types
+  store.ts         Zustand store
 ```
 
 ---
 
-## Standard agent workflow
+## Node statuses
 
-```
-# 1. Orient — start of every session
-get_domain_map(project_path="C:/Users/a7don/my_projects/archmap")
-describe_architecture(project_path="C:/Users/a7don/my_projects/archmap")
-
-# 2. Before editing a component — REQUIRED
-get_context(
-    project_path="C:/Users/a7don/my_projects/archmap",
-    component_id="<comp_id>",
-    task="<what you are about to do>"
-)
-# Returns: files + symbols, contracts, impact, quality, tasks, rules, ADRs.
-# Quality score must not decrease after your changes.
-
-# 3. After editing files — REQUIRED
-post_edit_sync(project_path="...", file_paths=["..."], reinfer_dependencies=True)
-check_code_quality(project_path="...", component_id="<comp_id>")
-
-# 4. Search — locate things without reading files
-search(project_path="...", query="<keyword>")             # components/files/symbols
-search_symbol(project_path="...", query="<fn name>")      # symbol-level lookup
-```
+| Status | Visual | Meaning |
+|--------|--------|---------|
+| `confirmed` | solid | User reviewed and approved |
+| `proposed` | grey/ghost | Proposed by agent, awaiting review |
+| `removing` | strikethrough | Agent proposes deletion, awaiting review |
 
 ---
 
-## Before reading a file — locate the symbol first
-
-```
-search_symbol(project_path="...", query="<function or class name>")
-```
-Returns file path, component, signature, and doc. Jump directly to the right file.
-
-Once you know the file, read only the function you need:
-```
-read_function(project_path="...", file_path="archmap/store.py", symbol="mutate_arch")
-```
-Only fall back to `Read` / `Grep` if the symbol isn't in the index yet.
-
----
-
-## Before modifying a heavily-used component
-
-```
-get_component_impact(project_path="...", component_id="<comp_id>")
-```
-Shows upstream (breaks if you change this) and downstream (what this depends on).
-`impact_score` = number of upstream components — higher means riskier change.
-
----
-
-## Code quality — check before and after every edit
-
-```
-check_code_quality(project_path="...", component_id="<comp_id>")
-# include_types=True to also run mypy type checking
-```
-
-Returns: `score` (0–100), `lint_issues` (ruff), `format_issues`, `type_issues`,
-`fix_priority` (files ordered by severity), `hotspots` (complex + dirty files).
-
-**Agent workflow for quality:**
-1. `check_code_quality` before starting — understand the baseline
-2. Fix errors in `fix_priority` order before adding new code
-3. `post_edit_sync` after each fix to keep the graph current
-4. `check_code_quality` again at the end — score must not decrease
-
-**For TypeScript files**, run `npm run lint` in `ui/` (uses ESLint):
-```bash
-cd C:/Users/a7don/my_projects/archmap/ui && npm run lint
-```
-
-**Augmenting code quality** — agents are authorized to proactively fix:
-- Ruff lint errors (E/W codes) — always fix
-- Unused imports, undefined names — always fix
-- Formatting (`ruff format`) — fix if touching the file anyway
-- Type errors (mypy) — fix if the fix is local and non-breaking
-- Do NOT change public APIs or restructure modules without an ADR
-
----
-
-## Checking architectural health before a large change
-
-```
-check_integrity(project_path="...")
-validate_architecture(project_path="...")
-```
-- `check_integrity` — stale files, missing files, dangling deps, unmapped source files
-- `validate_architecture` — checks all deps against layer rules (no frontend→db, etc.)
-
-Fix violations before adding new code on top of broken foundations.
-
----
-
-## After editing files — REQUIRED
-
-Call `post_edit_sync` immediately after any file edit or creation:
-```
-post_edit_sync(
-    project_path="...",
-    file_paths=["archmap/store.py", "archmap/models.py"],
-    reinfer_dependencies=True,   # set True if you added/removed imports
-    validate=True                # checks new deps against architectural rules
-)
-```
-
-Check the response:
-- `synced`           → symbols updated ✓
-- `unmapped`         → new file not in graph yet; call `map_file()` then sync again
-- `errors`           → extraction failed; inspect the file
-- `rule_violations`  → architectural rules broken by new code → fix before committing
-- `architecture_clean: true` → generation passed all architectural constraints ✓
-
----
-
-## When you create a new file
-
-```
-# 1. Decide which component it belongs to
-find_related(project_path="...", query="<what the file does>")
-
-# 2. Map it
-map_file(project_path="...", file_path="archmap/newmodule.py", component_id="comp_...")
-
-# 3. Sync its symbols
-post_edit_sync(project_path="...", file_paths=["archmap/newmodule.py"])
-```
-
----
-
-## When you add/remove imports between components
-
-```
-post_edit_sync(
-    project_path="...",
-    file_paths=["archmap/changed_file.py"],
-    reinfer_dependencies=True   # re-scans all imports → updates dependency graph
-)
-```
-
----
-
-## Exporting the architecture (for docs, CI, PR review)
-
-```
-export_architecture(project_path="...", format="mermaid")
-# → Mermaid flowchart — paste into GitHub README or PR description
-
-export_architecture(project_path="...", format="dot")
-# → Graphviz DOT — render with `dot -Tpng` or paste into diagrams.net
-```
-
----
-
-## Tracking architectural drift (CI/CD, PR review)
-
-```
-# Save a baseline before your change
-snapshot_architecture(project_path="...", label="before-my-feature")
-
-# ... make your changes ...
-
-# Compare against it
-diff_architecture(project_path="...", snapshot_label="before-my-feature")
-```
-Returns added/removed/changed components and dependencies. Use in PR descriptions
-to make architectural intent explicit.
-
----
-
-## Architecture Decision Records (ADRs)
-
-Record *why* decisions were made — context, trade-offs, alternatives rejected.
-ADRs are automatically injected into `get_generation_context` briefs.
-
-```
-add_decision(project_path="...", component_id="<comp_id>",
-             title="Use JWT for auth sessions",
-             context="Need stateless auth across multiple API replicas",
-             decision="Sign JWTs with RS256; validate on every request",
-             consequences="No server-side session storage; token revocation is hard",
-             alternatives="Redis sessions, database-backed sessions",
-             status="accepted")   # proposed | accepted | deprecated | superseded
-
-list_decisions(project_path="...", component_id="<comp_id>", status="accepted")
-
-# Supersede an outdated decision (prefer this over delete)
-update_decision(project_path="...", decision_id="adr_abc123",
-                status="superseded", superseded_by="adr_xyz456")
-```
-
----
-
-## Component ownership & operational metadata
-
-```
-update_component(project_path="...", component_id="<comp_id>",
-    owner="team:platform",        # who is responsible long-term
-    tier="p0",                    # p0=pages on-call | p1 | p2 | p3
-    onboarding_notes="Clone repo, run make dev. See README#auth for JWT setup.",
-    runbook_url="https://wiki.internal/runbooks/auth",
-    slack_channel="#platform-alerts")
-```
-
-These fields are surfaced in `get_generation_context` briefs so agents know
-who owns the component and how critical it is before making changes.
-
----
-
-## Component layers
-
-| Layer | What belongs here |
-|-------|------------------|
-| `frontend` | UI, React pages, stores, CSS |
-| `backend` | API servers, route handlers, business logic |
-| `database` | Models, migrations, DB clients |
-| `infra` | Docker, CI, Terraform, deployment |
-| `shared` | Utilities, types, helpers used across layers |
-| `testing` | Test files, fixtures, test helpers |
-| `other` | Anything that doesn't fit above |
-
----
-
-## Key component IDs (ArchMap's own architecture)
-
-Run `list_components` to get current IDs — they change when components are recreated.
-Use `find_related(query="store")` to locate the right ID by name.
-
----
-
-## Sync is always explicit — nothing is automatic
-
-All graph updates require explicit agent action. There is no background sync.
-
-| What | How |
-|------|-----|
-| Symbol sync | `post_edit_sync(file_paths=[...])` — call after every edit |
-| New file mapping | `post_edit_sync` returns `unmapped` list → call `map_file` for each |
-| Dependency re-inference | `post_edit_sync(reinfer_dependencies=True)` — only when imports changed |
-| Architecture description | Always current (read from graph files directly) |
-
-**If you skip `post_edit_sync`, the graph drifts. There is no fallback.**
-
----
-
-## Running ArchMap itself
+## Running
 
 ```bash
-# Terminal 1 — API server (port 8765)
+# API server (port 8765)
 conda run -n archmap python api_server.py
 
-# Terminal 2 — React UI (port 5174)
+# React UI (port 5174)
 cd ui && npm run dev
 
-# MCP server (add to claude config, runs via stdio)
+# MCP server (stdio, configured in .mcp.json)
 python mcp_server.py
-```
 
-Tests:
-```bash
+# Tests
 conda run -n archmap python -m pytest tests/ -v
 ```
