@@ -9,6 +9,7 @@ export interface TreeNode {
   user_notes: string
   children: TreeNode[]
   files: string[]
+  file_snapshots: Record<string, number>
   cross_references: string[]
   created_at: string
   updated_at: string

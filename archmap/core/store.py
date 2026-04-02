@@ -1,5 +1,5 @@
 """
-Low-level atomic JSON persistence for the purpose tree and task queue.
+Low-level atomic JSON persistence for the purpose tree and task stack.
 
 Files: .archmap/tree.json, .archmap/tasks.json
 Locking: in-process threading lock + OS-level advisory lock.
