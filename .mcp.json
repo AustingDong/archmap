@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "archmap": {
-      "command": "C:\\Users\\a7don\\miniconda3\\envs\\archmap\\python.exe",
-      "args": ["C:\\Users\\a7don\\my_projects\\archmap\\mcp_server.py"]
+      "command": "python",
+      "args": ["mcp_server.py"]
     }
   }
 }

@@ -1,23 +1,23 @@
 {
   "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo 'ArchMap: You modified files. Call report() with files_touched before responding to the user.'"
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "python C:/Users/a7don/my_projects/archmap/.claude/check_task.py"
+            "command": "python .claude/hooks/context_inject.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/snapshot_update.py"
           }
         ]
       }
@@ -25,14 +25,11 @@
   },
   "permissions": {
     "allow": [
-      "Bash(cd:*)",
       "Bash(conda run:*)",
       "Bash(python:*)",
       "Bash(node:*)",
-      "Bash(npm install:*)",
+      "Bash(npm:*)",
       "Bash(ls:*)",
-      "Bash(curl:*)",
-      "Bash(npx tsc:*)",
       "Bash(pip install:*)",
       "mcp__archmap__orient",
       "mcp__archmap__get_task",

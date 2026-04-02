@@ -1,7 +1,8 @@
 """Hook script: prints the active task if one exists."""
 import json, os, sys
 
-tasks_path = os.path.join(os.environ.get("PROJECT_PATH", "C:/Users/a7don/my_projects/archmap"), ".archmap", "tasks.json")
+_default_project = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+tasks_path = os.path.join(os.environ.get("CLAUDE_PROJECT_DIR", _default_project), ".archmap", "tasks.json")
 if not os.path.exists(tasks_path):
     sys.exit(0)
 

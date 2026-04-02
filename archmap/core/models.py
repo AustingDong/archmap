@@ -122,9 +122,10 @@ class TreeNode:
 class Task:
     """A scoped intention that drives tree growth.
 
-    Tasks are processed as a queue. The active task's proposed nodes
-    appear as grey/ghost nodes in the tree. The user reviews and
-    approves/rejects proposals before the next task activates.
+    Tasks use LIFO (stack) ordering for depth-first tree construction.
+    The active task's proposed nodes appear as grey/ghost nodes in the
+    tree. The user reviews and approves/rejects proposals before the
+    next task activates.
     """
     id: str
     description: str

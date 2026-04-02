@@ -2,7 +2,8 @@
 from __future__ import annotations
 from pathlib import Path
 from archmap.core.models import TreeNode, NotFoundError
-from archmap.core.store import load_tree
+from archmap.core.store import load_tree, mutate_tree, normalize_path
+from archmap.tree_crud import _file_index
 
 
 def get_context(project_path: str, node_id: str) -> str:
@@ -97,6 +98,86 @@ def render_tree(project_path: str, max_depth: int = 2) -> str:
 
     _render(tree, 0, "", True)
     return "\n".join(lines)
+
+
+# ─── Brief context for hooks ───────────────────────────────────────────────
+
+def get_brief_context(project_path: str, file_path: str) -> str:
+    """Return a concise architectural briefing for a file being edited.
+    Designed for pre-edit hook injection — 4-6 lines max.
+    Returns empty string if the file isn't in the tree."""
+    from archmap.tasks import get_active_task
+
+    tree = load_tree(project_path)
+    if tree is None:
+        return ""
+
+    norm = normalize_path(project_path, file_path)
+    index = _file_index(tree)
+    node_id = index.get(norm)
+    if not node_id:
+        return ""
+
+    path = tree.path_to(node_id)
+    if not path:
+        return ""
+
+    node = path[-1]
+    filename = Path(norm).name
+    breadcrumb = " > ".join(n.name for n in path)
+
+    lines = [f"[ArchMap] {filename} -> {node.name}"]
+    lines.append(f"Branch: {breadcrumb}")
+
+    if node.description:
+        lines.append(f"Purpose: {node.description}")
+
+    # Sibling summary: name + primary file
+    if len(path) >= 2:
+        parent = path[-2]
+        siblings = [c for c in parent.children if c.id != node_id]
+        if siblings:
+            parts = []
+            for s in siblings:
+                if s.files:
+                    primary = Path(s.files[0]).name
+                    parts.append(f"{s.name} ({primary})")
+                else:
+                    parts.append(s.name)
+            lines.append(f"Siblings: {', '.join(parts)}")
+
+    if node.user_notes:
+        lines.append(f"Notes: {node.user_notes}")
+
+    active = get_active_task(project_path)
+    if active:
+        lines.append(f"Active task: {active.description}")
+
+    return "\n".join(lines)
+
+
+def update_file_snapshot(project_path: str, file_path: str) -> bool:
+    """Update a file's mtime snapshot in the tree. Returns False if file not in tree."""
+    norm = normalize_path(project_path, file_path)
+    full = Path(project_path) / norm
+
+    if not full.exists():
+        return False
+
+    current_mtime = full.stat().st_mtime
+
+    def _update(tree: TreeNode) -> bool:
+        idx = _file_index(tree)
+        nid = idx.get(norm)
+        if not nid:
+            return False
+        node = tree.find(nid)
+        if node:
+            node.file_snapshots[norm] = current_mtime
+            return True
+        return False
+
+    return mutate_tree(project_path, _update)
 
 
 # ─── On-demand file scanning ────────────────────────────────────────────────

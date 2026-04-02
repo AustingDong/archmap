@@ -3,7 +3,7 @@ Tree operations — re-export barrel.
 
 Split by purpose:
   tree_crud.py   — node CRUD + file attachment
-  tasks.py       — task queue (create, complete, reject, advance)
+  tasks.py       — task stack (LIFO create, activate, complete, reject)
   proposals.py   — propose/approve/reject (agent gate)
   context.py     — agent context serialization + ASCII rendering + file scanning
 """
@@ -14,7 +14,7 @@ from archmap.tree_crud import (  # noqa: F401
     _file_index,
 )
 
-# Task queue
+# Task stack
 from archmap.tasks import (  # noqa: F401
     list_tasks, get_active_task, create_task, activate_next_task,
     complete_task, reject_task,
@@ -28,4 +28,5 @@ from archmap.proposals import (  # noqa: F401
 # Context & rendering
 from archmap.context import (  # noqa: F401
     get_context, render_tree, detect_drift, suggest_files,
+    get_brief_context, update_file_snapshot,
 )
