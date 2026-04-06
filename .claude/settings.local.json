@@ -1,4 +1,21 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(conda run:*)",
+      "Bash(python:*)",
+      "Bash(node:*)",
+      "Bash(npm:*)",
+      "Bash(ls:*)",
+      "Bash(pip install:*)",
+      "mcp__archmap__orient",
+      "mcp__archmap__get_task",
+      "mcp__archmap__report",
+      "WebSearch"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "archmap"
+  ],
   "hooks": {
     "PreToolUse": [
       {
@@ -23,18 +40,5 @@
       }
     ]
   },
-  "permissions": {
-    "allow": [
-      "Bash(conda run:*)",
-      "Bash(python:*)",
-      "Bash(node:*)",
-      "Bash(npm:*)",
-      "Bash(ls:*)",
-      "Bash(pip install:*)",
-      "mcp__archmap__orient",
-      "mcp__archmap__get_task",
-      "mcp__archmap__report",
-      "WebSearch"
-    ]
-  }
+  "enableAllProjectMcpServers": true
 }
