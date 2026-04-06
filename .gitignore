@@ -28,4 +28,6 @@ Thumbs.db
 .env
 .venv/
 venv/
-/.claude
+# Claude Code: ship hooks and skills, but not personal settings
+.claude/settings.local.json
+.claude/check_task.py
