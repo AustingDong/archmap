@@ -1,8 +1,10 @@
 # ArchMap
 
-**A purpose tree that makes AI agents understand your codebase before they edit it.**
+**A purpose tree that makes AI coding agents understand your codebase before they edit it.**
 
-ArchMap builds a hierarchical map of *why* your code exists, not just *where* it lives. Agents propose structure as grey nodes; humans review and approve. When agents later edit files, ArchMap automatically injects the relevant architectural context -- which branch this file belongs to, what its purpose is, and what else might be affected.
+ArchMap builds a hierarchical map of *why* your code exists, not just *where* it lives. Agents propose structure as grey nodes; humans review and approve. Then, whenever an agent edits a file, ArchMap silently injects the relevant architectural context -- which branch this file belongs to, what its purpose is, what its siblings are, and any notes you've left for future agents.
+
+No new tools to learn. No prompt engineering. The agent just knows more.
 
 ```
 [ArchMap] price_fetcher.py -> Market Data
@@ -288,7 +290,8 @@ The FastAPI server (`api_server.py`, port 8765) exposes endpoints for the UI and
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/tree` | Full tree as JSON |
-| GET | `/api/tree/render` | ASCII-rendered tree |
+| GET | `/api/tree/render` | ASCII-rendered tree (`?max_depth=N`) |
+| GET | `/api/context` | Agent context for a node (`?node_id=...`) |
 | POST | `/api/tree/root` | Create root node |
 | POST | `/api/tree/reset` | Delete the tree |
 
@@ -316,6 +319,7 @@ The FastAPI server (`api_server.py`, port 8765) exposes endpoints for the UI and
 | GET | `/api/tasks` | List all tasks |
 | GET | `/api/task/active` | Get the active task |
 | POST | `/api/task` | Create a new task |
+| POST | `/api/task/activate-next` | Activate the most recent queued task (LIFO) |
 | POST | `/api/task/complete` | Complete a task (+ optional auto-advance) |
 | POST | `/api/task/reject` | Reject a task (removes its proposals) |
 | POST | `/api/task/propose` | Propose a new node (agent-facing) |
